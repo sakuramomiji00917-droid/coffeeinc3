@@ -996,16 +996,11 @@
         };
         window.getCountryBadge = function (country) { return countryBadge[country] || ''; };
 
-        // 金庫株ヘルパー: 浮動株数（金庫株・自己株を除いた実質流通株）
+        // 金庫株ヘルパー: 浮動株数（ルールBにより、現在は総発行済株式数を返す）
         window.getFloatShares = function(co) {
-            let treasury = 0;
-            // プレイヤー企業は別管理の金庫株のみを除外。id 'player' が誤って自己株として二重カウントされるのを防ぐ
-            if (co.id === 'player') {
-                treasury = (co._treasuryShares || 0);
-            } else {
-                treasury = (co.shareholders && co.shareholders[co.id]) || 0;
-            }
-            return Math.max(0, co.shares - treasury);
+            // 金庫株（自社株買い）は市場の流通株（Market Shares）を減らす防衛手段として機能しますが、
+            // 傘下（子会社）かどうかの判定判定分母からは除外せず、常に「総発行株式の50%超」を要求するように変更。
+            return co.shares || 0;
         };
         // 市場流通株（誰にも名義登録されていない株）を動的に計算
         window.getMarketShares = function(co) {
@@ -1018,16 +1013,16 @@
             if (co.id === 'player') owned += (co._treasuryShares || 0); // プレイヤー金庫株も市場外分としてカウント
             return Math.max(0, co.shares - owned);
         };
-        // 浮動株に占める保有比率（金庫株を除いた議決権ベース）
+        // 総株式に占める保有比率（ルールBに基づく）
         window.getFloatPct = function(co, holderId) {
-            let floatSh = window.getFloatShares(co);
-            if (floatSh <= 0) return 0;
-            return (co.shareholders[holderId] || 0) / floatSh;
+            let totalSh = window.getFloatShares(co);
+            if (totalSh <= 0) return 0;
+            return (co.shareholders[holderId] || 0) / totalSh;
         };
-        // 金庫株ヘルパー: 過半数取得に必要な株数（浮動株ベース）
+        // 金庫株ヘルパー: 過半数取得に必要な株数（総株式ベース）
         window.getMajorityTarget = function(co, currentHeld) {
-            let floatShares = window.getFloatShares(co);
-            let needed = Math.floor(floatShares * 0.51) + 1;
+            let totalShares = window.getFloatShares(co);
+            let needed = Math.floor(totalShares * 0.51) + 1;
             return Math.max(0, needed - (currentHeld || 0));
         };
 
@@ -2517,7 +2512,11 @@
                             if (insProfitRatio < -0.5) insCo.stockPrice = Math.floor(insCo.stockPrice * 0.98);
                         }
                         c.cash -= damageAmt * 0.3; // AI企業は自己負担30%
-                        if (c.cash < -300000000) c.isBankrupt = true;
+                        if (c.cash < -300000000 && !c.isBankrupt) {
+                            c.isBankrupt = true; c.stockPrice = 0;
+                            addLog(`【倒産確定】${c.name.replace(/\[.*?\]\s*/, '')} は巨額の負債を抱え、災害の致命的ダメージに耐えきれず倒産しました。`, 'alert', '競合');
+                            if (typeof showMarketAlert === 'function') showMarketAlert("💀 企業倒産・上場廃止", c.name.replace(/\[.*?\]\s*/, ''), `<b style="color:var(--danger);">${c.name.replace(/\[.*?\]\s*/, '')}</b> は巨額の負債による資金ショートと災害の致命的ダメージにより、突如倒産しました。`, "alert");
+                        }
                     }
                 });
             });
@@ -3948,8 +3947,15 @@
                                     if (parentCo && parentCo.cash > 100000000) {
                                         let injection = Math.min(parentCo.cash * 0.2, 80000000);
                                         parentCo.cash -= injection; c.cash += injection;
-                                        delete c._insolventSince; delete c._warnedBankrupt;
-                                        addLog(`【グループ支援】${parentCo.name.replace(/\[.*?\]\s*/, '')} が傘下の ${c.name.replace(/\[.*?\]\s*/, '')} に ¥${Math.floor(injection / 10000).toLocaleString()}万 を緊急注入。`, 'news', 'M&A');
+                                        
+                                        // 資金注入後の純資産を再確認
+                                        let updatedNetAssets = c.cash + Object.values(c.deposits || {}).reduce((s, v) => s + v, 0);
+                                        if (updatedNetAssets >= BANKRUPT_THRESHOLD) {
+                                            delete c._insolventSince; delete c._warnedBankrupt;
+                                            addLog(`【グループ支援】${parentCo.name.replace(/\[.*?\]\s*/, '')} が傘下の ${c.name.replace(/\[.*?\]\s*/, '')} に ¥${Math.floor(injection / 10000).toLocaleString()}万 を緊急注入し、破産の危機を脱しました。`, 'news', 'M&A');
+                                        } else {
+                                            addLog(`【焼け石に水】${parentCo.name.replace(/\[.*?\]\s*/, '')} が傘下の ${c.name.replace(/\[.*?\]\s*/, '')} に ¥${Math.floor(injection / 10000).toLocaleString()}万 を注入しましたが、依然として倒産の危機にあります。`, 'warning', 'M&A');
+                                        }
                                     } else {
                                         addLog(`【注目】${c.name.replace(/\[.*?\]\s*/, '')} の実質資産がマイナス圏に。倒産の危機に瀕しています。`, 'warning', '競合');
                                     }
@@ -4010,6 +4016,12 @@
 
                         // それでも現金がマイナスなら4週目で完全倒産
                         c.isBankrupt = true; c.stockPrice = 0;
+                        // 倒産した企業の保有株式をすべて市場に放出（ゴースト株主の防止）
+                        companies.forEach(other => {
+                            if (other.shareholders && other.shareholders[c.id] > 0) {
+                                delete other.shareholders[c.id];
+                            }
+                        });
                         ownedProperties.forEach(prop => { if (prop.owner === c.id) prop.owner = null; });
                         if (c.sector === 'coffee') {
                             c.stores.forEach(s => {
@@ -5548,6 +5560,12 @@
                                 }
                                 // 子会社消滅
                                 c.isBankrupt = true; c.stockPrice = 0; c.cash = 0;
+                                // 買収で消滅した企業の保有株式を市場に放出
+                                companies.forEach(other => {
+                                    if (other.shareholders && other.shareholders[c.id] > 0) {
+                                        delete other.shareholders[c.id];
+                                    }
+                                });
                                 let cName = c.name.replace(/\[.*?\]\s*/, '');
                                 let bName = bidderCo.name.replace(/\[.*?\]\s*/, '');
                                 addLog(`【吸収合併】${bName} が完全子会社 ${cName} を吸収合併。全資産を統合しました。`, 'alert', 'M&A');
@@ -5836,7 +5854,7 @@
                                           <input type="number" id="auction-bid-input" value="${Math.floor(topBid*1.05/10000)}" min="${Math.floor(basePrice/10000)}" style="width:100%;font-size:18px;font-weight:bold;text-align:center;border-radius:8px;border:2px solid var(--gold);background:#1e293b;color:#fff;padding:8px;">
                                         </div>
                                         <div style="display:flex;gap:10px;">
-                                          <button class="btn-outline btn-large" style="flex:1;border-color:#64748b;color:#94a3b8;" onclick="closeModal('auction-modal')">パス</button>
+                                          <button class="btn-outline btn-large" style="flex:1;border-color:#64748b;color:#94a3b8;" onclick="document.getElementById('auction-bid-input').value = '0'; submitAuctionBid('${c.id}','${target.id}','${topBidder?.id||''}',${topBid})">パス</button>
                                           <button class="btn-primary btn-large" style="flex:2;background:var(--gold);" onclick="submitAuctionBid('${c.id}','${target.id}','${topBidder?.id||''}',${topBid})">💰 この価格で落札する</button>
                                         </div>
                                       </div>
@@ -9372,7 +9390,7 @@ ${ds.desc}`)) {
                 target.name = `👑 [自社傘下] ${cleanName}`;
                 let acquiredShares = Math.floor(target.shares * 0.51);
                 target.shareholders['player'] = (target.shareholders['player'] || 0) + acquiredShares;
-                seller.shareholders[target.id] = Math.max(0, (seller.shareholders[target.id] || 0) - acquiredShares); // 売り手から株を減算
+                target.shareholders[seller.id] = Math.max(0, (target.shareholders[seller.id] || 0) - acquiredShares); // 売り手から株を減算
                 addLog(`【入札落札】${cleanName} を ¥${Math.floor(bidVal/10000).toLocaleString()}万 で落札しました！`, 'success', 'M&A');
             } else if (bidVal <= topBid && topBidderId) {
                 // AIが落札
@@ -9381,6 +9399,9 @@ ${ds.desc}`)) {
                     topBidder.cash -= topBid; seller.cash += topBid;
                     target.parent = topBidder.id;
                     target.name = `[${topBidder.name.replace(/\[.*?\]\s*/,'').slice(0,4)}傘下] ${target.name.replace(/\[.*?\]\s*/,'')}`;
+                    let acquiredShares = Math.floor(target.shares * 0.51);
+                    target.shareholders[topBidder.id] = (target.shareholders[topBidder.id] || 0) + acquiredShares;
+                    target.shareholders[seller.id] = Math.max(0, (target.shareholders[seller.id] || 0) - acquiredShares);
                     addLog(`【入札】${target.name.replace(/\[.*?\]\s*/,'')} は ${topBidder.name.replace(/\[.*?\]\s*/,'')} が ¥${Math.floor(topBid/10000).toLocaleString()}万 で落札しました。`, 'news', 'M&A');
                 }
             } else if (!topBidderId) {
@@ -10522,7 +10543,7 @@ ${ds.desc}`)) {
                         { label: '純利益', val: profit, color: '#2563eb', bold: true, top: true },
                     ].map(r => `<div style="display:flex;justify-content:space-between;padding:${r.top ? '8px 0 0 0;border-top:1px dashed #cbd5e1;margin-top:4px' : '5px 0'};font-size:${r.bold ? 13 : 12}px;">
                                 <span style="color:#64748b;font-weight:${r.bold ? 700 : 400};">${r.label}</span>
-                                <span style="font-weight:800;color:${r.color};">${r.val >= 0 ? '+' : ''}¥${f(Math.abs(r.val))}</span>
+                                <span style="font-weight:800;color:${r.color};">${r.val > 0 ? '+' : (r.val < 0 ? '-' : '')}¥${f(Math.abs(r.val))}</span>
                             </div>`).join('')}
                         </div>
                     </div>
@@ -10536,7 +10557,7 @@ ${ds.desc}`)) {
                         { label: '純資産', val: equity, color: '#16a34a', bold: true, top: true },
                     ].map(r => `<div style="display:flex;justify-content:space-between;padding:${r.top ? '8px 0 0 0;border-top:1px dashed #cbd5e1;margin-top:4px' : '5px 0'};font-size:${r.bold ? 13 : 12}px;">
                                 <span style="color:#64748b;font-weight:${r.bold ? 700 : 400};">${r.label}</span>
-                                <span style="font-weight:800;color:${r.color};">¥${f(Math.abs(r.val))}</span>
+                                <span style="font-weight:800;color:${r.color};">${r.val < 0 ? '-' : ''}¥${f(Math.abs(r.val))}</span>
                             </div>`).join('')}
                             <div style="margin-top:8px;border-top:1px dashed #cbd5e1;padding-top:8px;">
                                 <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px;">
