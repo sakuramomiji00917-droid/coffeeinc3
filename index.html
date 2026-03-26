@@ -4109,12 +4109,12 @@
                             }
                             buyer.cash -= 1000000; // 象徴的な買収費
                             c.parent = buyer.id;
-                            // 救済買収でも55%株式付与
+                            // 救済買収（第三者割当増資で55%付与）
                             if (!c.shareholders) c.shareholders = {};
-                            let rescueShares = Math.ceil((c.shares || 10000) * 0.55);
-                            for (let sid in c.shareholders) {
-                                c.shareholders[sid] = Math.floor(c.shareholders[sid] * 0.45);
-                            }
+                            let oldShares = c.shares || 10000;
+                            let newTotal = Math.floor(oldShares / 0.45);
+                            let rescueShares = newTotal - oldShares;
+                            c.shares = newTotal;
                             c.shareholders[buyer.id] = rescueShares;
                             // 傘下名を正しく付与
                             let _rescuedCleanName = c.name.replace(/\[.*?\]\s*/g,'');
@@ -4313,17 +4313,18 @@
                         let _buyProb = c.sector === 'sogo' ? ((_portSize < 5) ? 0.70 : 0.45) : 0.25;
                         // 20%未満の銘柄を優先買い増し（持分法収益獲得のため）
                         if (Math.random() < _buyProb && c.cash > 50000000) {
+                            let targetStake = (c.sector === 'bank' ? 0.05 : 0.10);
                             let underTarget = companies.filter(t =>
                                 t.id !== c.id && t.isPublic && !t.isBankrupt &&
-                                (t.shareholders[c.id] || 0) / Math.max(1, t.shares) < (t.id === 'player' ? 0.10 : 0.20) &&
+                                (t.shareholders[c.id] || 0) / Math.max(1, t.shares) < targetStake &&
                                 t.qNet > 0
                             );
                             if (underTarget.length > 0) {
                                 let tgt = underTarget.sort((a, b) => (b.qNet || 0) - (a.qNet || 0))[0];
-                                let need20pct = Math.floor(tgt.shares * 0.20);
+                                let needPct = Math.floor(tgt.shares * targetStake);
                                 let nowHold = tgt.shareholders[c.id] || 0;
                                 let buyShares = Math.min(
-                                    Math.floor((need20pct - nowHold) * (0.3 + Math.random() * 0.5)),
+                                    Math.floor((needPct - nowHold) * (0.3 + Math.random() * 0.5)),
                                     Math.floor(c.cash / (tgt.stockPrice || 100))
                                 );
                                 if (buyShares > 0 && c.cash >= buyShares * tgt.stockPrice) {
@@ -5590,11 +5591,12 @@
 
                     } else if (elapsed >= 1 && elapsed <= 3 && Math.random() < 0.08 && !knightEvent) {
                         // ── ターゲット企業がホワイトナイトを要請 ──
-                        // 条件: ①ターゲットが時価総額5億以上 ②買収者が40%未満保有
+                        // 条件: ①ターゲットが時価総額5億以上 ②買収者が40%未満保有 ③プレイヤーが支配（50%超）していない
                         let bidderPct = (c.shareholders[tob.bidder] || 0) / c.shares;
                         let tooLate = bidderPct >= 0.40; // 手遅れ
+                        let playerControls = (c.shareholders['player'] || 0) / c.shares >= 0.50; // プレイヤー支配
                         let tooSmall = c.marketCap < 500000000; // 弱小は呼べない
-                        if (!tooLate && !tooSmall) {
+                        if (!tooLate && !tooSmall && !playerControls) {
                             let needed = tob.price * 1.15 * tob.targetShares;
                             // ターゲットより時価総額が大きい企業のみ対象
                             let biggerCos = companies.filter(k =>
@@ -5626,10 +5628,13 @@
                     // AI同士の場合はログのみ（モーダル表示なし）
                     let t = knightEvent.target, k = knightEvent.knight;
                     t.activeTOB_v2 = null;
-                    // 55%株式付与（救済買収と同じ）
-                    let _wnShares = Math.ceil((t.shares || 10000) * 0.55);
-                    for (let _sid in t.shareholders) { t.shareholders[_sid] = Math.floor((t.shareholders[_sid] || 0) * 0.45); }
-                    t.shareholders[k.id] = _wnShares;
+                    // 第三者割当増資（新株発行で55%付与）に変更
+                    let oldShares = t.shares || 10000;
+                    let newTotal = Math.floor(oldShares / 0.45);
+                    let _wnShares = newTotal - oldShares;
+                    t.shares = newTotal;
+                    t.shareholders[k.id] = (t.shareholders[k.id] || 0) + _wnShares;
+                    t.cash += Math.floor(_wnShares * t.stockPrice * 0.9);
                     t.parent = k.id;
                     t.name = `[${k.name.replace(/\[.*?\]\s*/g,'')}傘下] ${t.name.replace(/\[.*?\]\s*/g,'')}`;
                     addLog(`【買収防衛】${t.name.replace(/\[.*?\]\s*/g,'')} がホワイトナイト ${k.name.replace(/\[.*?\]\s*/g,'')} に救済合併。買収阻止。`, 'news', 'M&A');
@@ -10488,7 +10493,7 @@ ${ds.desc}`)) {
                     let floatShares = 0;
                     for (let i = 0; i < shArray.length; i++) {
                         if (shArray[i].id === 'market') { floatShares += shArray[i].shares; totalHeld += shArray[i].shares; continue; }
-                        if (labels.length < 6) {
+                        if (labels.length < 12) {
                             let ownerCo = companies.find(c => c.id === shArray[i].id);
                             labels.push(shArray[i].id === 'player' ? '自社' : (ownerCo ? ownerCo.name.replace(/\[.*?\]\s*/, '').substring(0, 8) : shArray[i].id));
                             data.push(shArray[i].shares);
@@ -12943,10 +12948,13 @@ ${ds.desc}`)) {
             }
             if (!fightBack) {
                 t.activeTOB_v2.bidder = knightId; t.activeTOB_v2.price = counterPrice; t.stockPrice = counterPrice;
-                // TOB完了: ホワイトナイトが対象を買収（55%付与）
-                let _wnShares2 = Math.ceil((t.shares || 10000) * 0.55);
-                for (let _sid in t.shareholders) { t.shareholders[_sid] = Math.floor((t.shareholders[_sid] || 0) * 0.45); }
-                t.shareholders[k.id] = _wnShares2;
+                // TOB完了: ホワイトナイトが対象を買収（第三者割当増資で55%付与）
+                let oldShares = t.shares || 10000;
+                let newTotal = Math.floor(oldShares / 0.45);
+                let _wnShares2 = newTotal - oldShares;
+                t.shares = newTotal;
+                t.shareholders[k.id] = (t.shareholders[k.id] || 0) + _wnShares2;
+                t.cash += Math.floor(_wnShares2 * t.stockPrice * 0.9);
                 t.parent = k.id;
                 t.name = `[${k.name.replace(/\[.*?\]\s*/, '')}傘下] ${t.name.replace(/\[.*?\]\s*/, '')}`;
                 addLog(`【買収防衛】${t.name.replace(/\[.*?\]\s*/, '')}、友好企業 ${k.name.replace(/\[.*?\]\s*/, '')} に救済合併を要請。ホワイトナイトの対抗TOBにより買収計画が阻止された。`, 'alert', 'M&A');
