@@ -1769,7 +1769,9 @@
                 let _enemyPct = _flSh > 0 ? _enemyShares / _flSh : 0;
                 let banner = document.getElementById('hostile-takeover-banner');
                 let bannerText = document.getElementById('hostile-banner-text');
-                if (banner) {
+                if (p._skipTakeoverWarningWeek && (week - p._skipTakeoverWarningWeek < 12)) {
+                    if (banner) banner.style.display = 'none';
+                } else if (banner) {
                     if (_enemyPct >= 0.35) {
                         banner.style.display = 'block';
                         banner.style.background = 'linear-gradient(90deg,#7f1d1d,#dc2626)';
@@ -1856,7 +1858,7 @@
                         <div style="margin-top:10px;height:8px;background:#fee2e2;border-radius:4px;overflow:hidden;">
                             <div style="width:${Math.min(100, stolenPct * 100)}%;height:100%;background:${dangerColor};border-radius:4px;transition:width 0.3s;"></div>
                         </div>
-                        <div style="font-size:10px;color:var(--text-mut);margin-top:4px;">50%を超えるとゲームオーバー</div>
+                        <div style="font-size:10px;color:var(--text-mut);margin-top:4px;">※単一の敵対株主が過半数(51%)を取得するとゲームオーバー</div>
                     </div>
 
                     <h3 style="margin:0 0 12px;font-size:14px;">🛡 防衛手段を選択</h3>
@@ -1885,9 +1887,23 @@
                                 🤝 ホワイトナイトを招集
                             </button>
                         </div>
+                        <div style="border:1px solid var(--border);border-radius:10px;padding:12px;text-align:center;">
+                            <button onclick="dismissHostileTakeoverBanner('${modalId}')" style="width:100%;padding:10px;background:#64748b;color:#fff;border:none;border-radius:8px;font-weight:bold;cursor:pointer;">
+                                🙈 当分警告をスキップする（12週間）
+                            </button>
+                        </div>
                     </div>
                 </div>`;
             document.body.appendChild(div);
+        };
+
+        window.dismissHostileTakeoverBanner = function (modalId) {
+            let p = companies[0];
+            p._skipTakeoverWarningWeek = week;
+            document.getElementById(modalId).remove();
+            let banner = document.getElementById('hostile-takeover-banner');
+            if (banner) banner.style.display = 'none';
+            addLog(`【防衛】敵対的買収の警告バナーを12週間スキップしました。`, 'normal', '自社');
         };
 
         // 自社株買い5%
@@ -5867,30 +5883,94 @@
                                     window._pendingAuctionTopBid = topBid;
                                 }
                             },
-                            // ⑤ 買収提案
-                            {
-                                title: `🤝 買収提案（業績好調な同業他社）`,
-                                desc: `成長加速のため、同業他社への買収TOBを取締役会に提案します。`,
-                                action: () => {
-                                    let targets = companies.filter(t => t.id !== c.id && !t.isBankrupt && !t.parent && t.isPublic && t.sector === c.sector && t.marketCap < c.marketCap * 1.5);
-                                    if (targets.length === 0) { addLog(`【提案不成立】${c.name.replace(/\[.*?\]\s*/,'')} に適切な買収ターゲットが見つかりません。`, 'warning', 'M&A'); return; }
-                                    let tgt = targets.sort((a,b) => (b.qNet||0)-(a.qNet||0))[0];
-                                    let prem = 20 + Math.floor(Math.random() * 20);
-                                    let price = Math.floor(tgt.stockPrice * (1 + prem/100));
-                                    let sharesNeeded = Math.floor(window.getFloatShares ? window.getFloatShares(tgt) * 0.51 : tgt.shares * 0.51);
-                                    if (!tgt.activeTOB_v2) {
-                                        tgt.activeTOB_v2 = { bidder: c.id, price, targetShares: sharesNeeded, startWeek: week, deadline: week + 4, premiumPct: prem };
-                                        addLog(`【TOB宣言】総会可決により ${c.name.replace(/\[.*?\]\s*/,'')} が ${tgt.name.replace(/\[.*?\]\s*/,'')} に TOB宣言！（プレミアム +${prem}%）`, 'alert', 'M&A');
-                                    }
-                                }
-                            },
-                            // ⑥ 経営陣刷新（タイプ選択）
+                            // ⑤ 経営陣刷新（タイプ選択）
                             ...availMgmt.slice(0,2).map(mt => ({
                                 title: `👔 経営陣刷新 → ${mt.label}`,
                                 desc: `現CEO を解任し、${mt.label} を就任させます。効果: ${mt.effect}`,
                                 action: () => { mt.apply(c); addLog(`【経営刷新】${c.name.replace(/\[.*?\]\s*/,'')} が ${mt.label} 体制に移行。`, 'warning', '経済'); }
-                            }))
+                            })),
+                            // ⑥ 設備投資・メニュー開発
+                            {
+                                title: `🛠️ 設備投資・メニュー開発`,
+                                desc: `将来の競争力強化のため、手元資金の10%を設備投資や製品開発に充てます。`,
+                                action: () => {
+                                    let cost = Math.floor(c.cash * 0.1);
+                                    c.cash -= cost;
+                                    c.stockPrice = Math.floor((c.stockPrice||100) * 1.05);
+                                    addLog(`【事業投資】${c.name.replace(/\[.*?\]\s*/,'')} が資金 ¥${Math.floor(cost/10000).toLocaleString()}万 を設備・開発に投資しました。`, 'success', '経済');
+                                }
+                            },
+                            // ⑦ 大型資金調達（銀行借入）
+                            {
+                                title: `🏦 戦略的借入（資金調達）`,
+                                desc: `成長余力を高めるため、銀行から時価総額の10%相当の大型融資を引き出します。`,
+                                action: () => {
+                                    let availBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt && b.cash > 0);
+                                    if (availBanks.length > 0) {
+                                        let lender = availBanks.reduce((a, b) => (b.loanRate||0.005) < (a.loanRate||0.005) ? b : a);
+                                        let borrowAmt = Math.floor(c.marketCap * 0.1);
+                                        c.cash += borrowAmt; lender.cash -= borrowAmt;
+                                        if (!c.bankDebts) c.bankDebts = {};
+                                        c.bankDebts[lender.id] = (c.bankDebts[lender.id]||0) + borrowAmt;
+                                        addLog(`【大型借入】${c.name.replace(/\[.*?\]\s*/,'')} が銀行から ¥${Math.floor(borrowAmt/10000).toLocaleString()}万 を戦略的に借入れました。`, 'normal', '経済');
+                                    } else {
+                                        addLog(`【借入失敗】${c.name.replace(/\[.*?\]\s*/,'')} は貸出可能な銀行を見つけられませんでした。`, 'warning', '経済');
+                                    }
+                                }
+                            }
                         ];
+
+                        // 🎯 M&A提案：生成時にターゲットを選定
+                        let maTargets = companies.filter(t => t.id !== c.id && !t.isBankrupt && !t.parent && t.isPublic && t.marketCap < c.marketCap * 1.5 && t.id !== 'player');
+                        if (maTargets.length > 0) {
+                            let tgt = maTargets.sort((a,b) => (b.qNet||0)-(a.qNet||0))[0];
+                            let prem = 20 + Math.floor(Math.random() * 20);
+                            let price = Math.floor(tgt.stockPrice * (1 + prem/100));
+                            let sharesNeeded = Math.floor(window.getFloatShares ? window.getFloatShares(tgt) * 0.51 : tgt.shares * 0.51);
+                            proposals.push({
+                                title: `🎯 M&A提案：${tgt.name.replace(/\[.*?\]\s*/,'')} へのTOB`,
+                                desc: `成長性が見込める ${tgt.name.replace(/\[.*?\]\s*/,'')} を買収するため、プレミアム+${prem}%にてTOBを仕掛けます。不足分は銀行借入も行います。`,
+                                action: () => {
+                                    let cost = sharesNeeded * price;
+                                    // 資金不足なら事前に借入
+                                    if (c.cash < cost && c.sector !== 'bank') {
+                                        let availBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt && b.cash > 0);
+                                        if (availBanks.length > 0) {
+                                            let lender = availBanks.reduce((a, b) => (b.loanRate||0.005) < (a.loanRate||0.005) ? b : a);
+                                            let borrowAmt = Math.min(Math.floor(c.marketCap * 0.8), cost - c.cash);
+                                            if (borrowAmt > 0) {
+                                                c.cash += borrowAmt; lender.cash -= borrowAmt;
+                                                if (!c.bankDebts) c.bankDebts = {};
+                                                c.bankDebts[lender.id] = (c.bankDebts[lender.id]||0) + borrowAmt;
+                                                addLog(`【資金調達】${c.name.replace(/\[.*?\]\s*/,'')} が資金調達のため ¥${Math.floor(borrowAmt/10000).toLocaleString()}万 を銀行から借入しました。`, 'normal', 'M&A');
+                                            }
+                                        }
+                                    }
+                                    if (!tgt.activeTOB_v2) {
+                                        tgt.activeTOB_v2 = { bidder: c.id, price, targetShares: sharesNeeded, startWeek: week, deadline: week + 4, premiumPct: prem };
+                                        addLog(`【TOB発議】株主総会可決により ${c.name.replace(/\[.*?\]\s*/,'')} が ${tgt.name.replace(/\[.*?\]\s*/,'')} に TOB開始！（プレミアム +${prem}%）`, 'alert', 'M&A');
+                                    } else {
+                                        addLog(`【TOB不可】${tgt.name.replace(/\[.*?\]\s*/,'')} はすでに他のTOBにかかっているため、提案は流会しました。`, 'warning', 'M&A');
+                                    }
+                                }
+                            });
+                        }
+
+                        // 💸 金庫株放出
+                        if ((c.shareholders[c.id] || 0) > c.shares * 0.01) {
+                            proposals.push({
+                                title: `💸 金庫株の市場放出`,
+                                desc: `保有している自社株（金庫株）をすべて市場に放出し、現金に換えます。希薄化で株価は低下します。`,
+                                action: () => {
+                                    let treasurySh = c.shareholders[c.id];
+                                    let proceeds = treasurySh * c.stockPrice;
+                                    c.cash += proceeds;
+                                    c.shareholders[c.id] = 0;
+                                    c.stockPrice = Math.max(10, Math.floor((c.stockPrice||100) * 0.95));
+                                    addLog(`【金庫株放出】${c.name.replace(/\[.*?\]\s*/,'')} が金庫株 ${treasurySh.toLocaleString()}株を売却し、¥${Math.floor(proceeds/10000).toLocaleString()}万 を調達。`, 'normal', 'M&A');
+                                }
+                            });
+                        }
 
                         if (c.sector === 'bank') {
                             proposals.push({
@@ -9162,7 +9242,7 @@ ${ds.desc}`)) {
                     </td>
                     <td style="text-align:right;padding:10px 8px;font-size:13px;font-weight:900;color:${priceColor};">¥${c.stockPrice.toLocaleString()}</td>
                     <td style="text-align:right;padding:10px 8px;font-size:12px;font-weight:900;color:${priceColor};">${sign}${diffPct.toFixed(1)}%</td>
-                    <td style="text-align:right;padding:10px 8px;font-size:11px;font-weight:900;color:var(--gold);">${(c.id !== 'player' && c.dividendRate > 0 && c.lastQProfit > 0) ? '¥' + Math.floor((c.lastQProfit * (c.dividendRate / 100)) / c.shares).toLocaleString() : '-'}</td>
+                    <td style="text-align:right;padding:10px 8px;font-size:11px;font-weight:900;color:var(--gold);">${(c.dividendRate > 0 && c.lastQProfit > 0) ? '¥' + Math.floor((c.lastQProfit * (c.dividendRate / 100)) / (c.shares || 1)).toLocaleString() : '-'}</td>
                     <td style="text-align:right;padding:10px 12px;font-size:12px;color:#64748b;">¥${cap}</td>
                 </tr>`;
             }).join('') || `<tr><td colspan="4" style="text-align:center;padding:30px;color:var(--text-mut);">このセクターに上場企業はありません</td></tr>`;
@@ -10417,6 +10497,12 @@ ${ds.desc}`)) {
                         }
                         totalHeld += shArray[i].shares;
                     }
+                    if (target.id === 'player' && target._treasuryShares > 0) {
+                        labels.push('金庫株');
+                        data.push(target._treasuryShares);
+                        colors.push('#6366f1');
+                        totalHeld += target._treasuryShares;
+                    }
                     floatShares += Math.max(0, target.shares - totalHeld);
                     if (othersShares > 0) { labels.push('その他大株主'); data.push(othersShares); colors.push('#94a3b8'); }
                     if (floatShares > 0) { labels.push('一般流通'); data.push(floatShares); colors.push('#e2e8f0'); }
@@ -10437,13 +10523,13 @@ ${ds.desc}`)) {
                 let revenue, expense, profit;
                 if (target.lastRevenue > 0) {
                     revenue = target.lastRevenue;
-                    expense = target.lastExpense || Math.floor(revenue * 0.75);
-                    profit = target.lastProfit || (revenue - expense);
+                    expense = target.lastExpense > 0 ? target.lastExpense : Math.floor(revenue * 0.75);
+                    profit = target.lastProfit && target.lastExpense > 0 ? target.lastProfit : (revenue - expense);
                 } else if (target.prevLastRevenue > 0) {
                     // 四半期リセット直後: 前期確定値を使用
                     revenue = target.prevLastRevenue;
-                    expense = target.prevLastExpense || Math.floor(revenue * 0.75);
-                    profit = target.prevLastProfit || (revenue - expense);
+                    expense = target.prevLastExpense > 0 ? target.prevLastExpense : Math.floor(revenue * 0.75);
+                    profit = target.prevLastProfit && target.prevLastExpense > 0 ? target.prevLastProfit : (revenue - expense);
                 } else if (target.lastQProfit > 0) {
                     // 旧データ: 純利益から粗収益を逆算（セクター別利益率）
                     let _margin = { bank: 0.70, re: 0.55, ins: 0.40, sogo: 0.60, log: 0.40, it: 0.55, coffee: 0.15, ad: 0.70 }[target.sector] || 0.25;
@@ -12344,7 +12430,7 @@ ${ds.desc}`)) {
                         // 筆頭株主の持分率で支持率を調整（持分が高いほど通りやすい）
                         let supportBonus = Math.min(0.30, playerStake * 0.8); // 最大+30%の支持バフ
                         Object.keys(targetCo.shareholders).forEach(id => {
-                            if (id === 'player') return;
+                            if (id === 'player' || id === 'market') return;
                             let s = targetCo.shareholders[id] || 0;
                             if (s < totalShares * 0.02) return; // 2%未満の株主は省略
                             countedNpcShares += s;
