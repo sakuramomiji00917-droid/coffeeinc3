@@ -5960,14 +5960,15 @@
                         if ((c.shareholders[c.id] || 0) > c.shares * 0.01) {
                             proposals.push({
                                 title: `💸 金庫株の市場放出`,
-                                desc: `保有している自社株（金庫株）をすべて市場に放出し、現金に換えます。希薄化で株価は低下します。`,
+                                desc: `保有している自社株（金庫株）の一部（最大5%）を市場に放出し、現金に換えます。需給悪化で株価は少し低下します。`,
                                 action: () => {
                                     let treasurySh = c.shareholders[c.id];
-                                    let proceeds = treasurySh * c.stockPrice;
+                                    let sellAmt = Math.min(treasurySh, Math.max(1, Math.floor(c.shares * 0.05)));
+                                    let proceeds = sellAmt * c.stockPrice;
                                     c.cash += proceeds;
-                                    c.shareholders[c.id] = 0;
-                                    c.stockPrice = Math.max(10, Math.floor((c.stockPrice||100) * 0.95));
-                                    addLog(`【金庫株放出】${c.name.replace(/\[.*?\]\s*/,'')} が金庫株 ${treasurySh.toLocaleString()}株を売却し、¥${Math.floor(proceeds/10000).toLocaleString()}万 を調達。`, 'normal', 'M&A');
+                                    c.shareholders[c.id] -= sellAmt;
+                                    c.stockPrice = Math.max(10, Math.floor((c.stockPrice||100) * 0.98));
+                                    addLog(`【金庫株放出】${c.name.replace(/\[.*?\]\s*/,'')} が金庫株 ${sellAmt.toLocaleString()}株を売却し、¥${Math.floor(proceeds/10000).toLocaleString()}万 を調達。`, 'normal', '財務');
                                 }
                             });
                         }
