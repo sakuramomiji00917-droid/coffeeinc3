@@ -10402,7 +10402,7 @@ ${ds.desc}`)) {
                     if (!ctx) return;
                     ctx = ctx.getContext('2d');
                     if (window.shareholderChart) window.shareholderChart.destroy();
-                    let labels = [], data = [], colors = [], totalHeld = 0;
+                    let labels = [], data = [], colors = [], totalHeld = 0, othersShares = 0;
                     let shArray = Object.keys(target.shareholders).map(k => ({ id: k, shares: target.shareholders[k] })).filter(d => d.shares > 0).sort((a, b) => b.shares - a.shares);
                     let floatShares = 0;
                     for (let i = 0; i < shArray.length; i++) {
@@ -10412,10 +10412,13 @@ ${ds.desc}`)) {
                             labels.push(shArray[i].id === 'player' ? '自社' : (ownerCo ? ownerCo.name.replace(/\[.*?\]\s*/, '').substring(0, 8) : shArray[i].id));
                             data.push(shArray[i].shares);
                             colors.push(shArray[i].id === 'player' ? 'var(--primary)' : (ownerCo ? ownerCo.color : '#94a3b8'));
+                        } else {
+                            othersShares += shArray[i].shares;
                         }
                         totalHeld += shArray[i].shares;
                     }
                     floatShares += Math.max(0, target.shares - totalHeld);
+                    if (othersShares > 0) { labels.push('その他大株主'); data.push(othersShares); colors.push('#94a3b8'); }
                     if (floatShares > 0) { labels.push('一般流通'); data.push(floatShares); colors.push('#e2e8f0'); }
                     window.shareholderChart = new Chart(ctx, {
                         type: 'doughnut', data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 2, borderColor: '#fff' }] },
