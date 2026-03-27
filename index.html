@@ -997,6 +997,24 @@
         window.getCountryBadge = function (country) { return countryBadge[country] || ''; };
 
         // 金庫株ヘルパー: 浮動株数（ルールBにより、現在は総発行済株式数を返す）
+        // 📦 パッケージ効果集計ヘルパー
+        window.getPkgEffects = function(co) {
+            let fx = {};
+            if (!co || !co._adoptedPkgs) return fx;
+            Object.keys(co._adoptedPkgs).forEach(pid => {
+                let provId = co._adoptedPkgs[pid];
+                let prov = companies.find(c => c.id === provId);
+                if (!prov || prov.isBankrupt || !prov._packages || prov._packages[pid]?.status !== 'ready') return;
+                let eff = pkgCoffeeEffects[pid];
+                if (!eff) return;
+                Object.entries(eff).forEach(([k, v]) => {
+                    if (typeof v === 'boolean') fx[k] = true;
+                    else fx[k] = (fx[k] || 0) + v;
+                });
+            });
+            return fx;
+        };
+
         window.getFloatShares = function(co) {
             // 金庫株（自社株買い）は市場の流通株（Market Shares）を減らす防衛手段として機能しますが、
             // 傘下（子会社）かどうかの判定判定分母からは除外せず、常に「総発行株式の50%超」を要求するように変更。
@@ -1373,7 +1391,108 @@
             { id: 'b8', name: 'フランチャイズ展開', initCost: 500000000, weeklyFixed: 0, weeklyPer: 200000000, logShare: 0, requiresLog: false, effect: { rentDown: 0.20, openSpeedUp: 2 }, desc: '家賃-20%・出店速度2倍。¥200万/店舗/週。' },
         ];
 
-        // 🌟 タレント・マトリックス：30種の店長データ
+        // ═══════════════════════════════════════
+        // 📦 業種別パッケージプラン（全6業種×10種=60種）
+        // ═══════════════════════════════════════
+        const sectorPackages = {
+            bank: [
+                { id:'bp1', name:'中小企業融資', cost:5e8, weeks:8, rev:8e6, risk:0.05, riskName:'貸倒れ', icon:'💳' },
+                { id:'bp2', name:'住宅ローン', cost:10e8, weeks:12, rev:15e6, risk:0.06, riskName:'金利変動', icon:'🏠' },
+                { id:'bp3', name:'クレジットカード', cost:8e8, weeks:10, rev:20e6, risk:0.07, riskName:'不正利用', icon:'💳' },
+                { id:'bp4', name:'資産運用サービス', cost:15e8, weeks:16, rev:30e6, risk:0.10, riskName:'市場暴落', icon:'📊' },
+                { id:'bp5', name:'国際送金', cost:3e8, weeks:6, rev:5e6, risk:0.04, riskName:'為替リスク', icon:'🌐' },
+                { id:'bp6', name:'ファクタリング', cost:6e8, weeks:8, rev:11e6, risk:0.08, riskName:'連鎖倒産', icon:'📄' },
+                { id:'bp7', name:'法人カード', cost:4e8, weeks:6, rev:7e6, risk:0.04, riskName:'与信事故', icon:'💼' },
+                { id:'bp8', name:'シンジケートローン', cost:20e8, weeks:20, rev:40e6, risk:0.12, riskName:'大型焦付き', icon:'🏦' },
+                { id:'bp9', name:'電子マネー決済', cost:7e8, weeks:10, rev:13e6, risk:0.06, riskName:'システム障害', icon:'📱' },
+                { id:'bp10', name:'ESG融資', cost:12e8, weeks:14, rev:25e6, risk:0.05, riskName:'格付低下', icon:'🌱' },
+            ],
+            it: [
+                { id:'ip1', name:'クラウドサービス', cost:8e8, weeks:10, rev:12e6, risk:0.06, riskName:'サーバー障害', icon:'☁️' },
+                { id:'ip2', name:'AI分析ツール', cost:12e8, weeks:14, rev:25e6, risk:0.08, riskName:'精度問題', icon:'🤖' },
+                { id:'ip3', name:'セキュリティ', cost:6e8, weeks:8, rev:9e6, risk:0.05, riskName:'ハッキング', icon:'🔒' },
+                { id:'ip4', name:'POSレジシステム', cost:4e8, weeks:6, rev:6e6, risk:0.04, riskName:'競合乗換', icon:'🖥️' },
+                { id:'ip5', name:'モバイルアプリ', cost:10e8, weeks:12, rev:18e6, risk:0.07, riskName:'OS更新', icon:'📱' },
+                { id:'ip6', name:'在庫管理AI', cost:7e8, weeks:8, rev:10e6, risk:0.06, riskName:'予測外れ', icon:'📦' },
+                { id:'ip7', name:'顧客データ分析', cost:9e8, weeks:10, rev:15e6, risk:0.09, riskName:'個人情報漏洩', icon:'📈' },
+                { id:'ip8', name:'自動発注システム', cost:5e8, weeks:6, rev:8e6, risk:0.05, riskName:'発注ミス', icon:'🔄' },
+                { id:'ip9', name:'デジタルサイネージ', cost:6e8, weeks:8, rev:11e6, risk:0.04, riskName:'故障', icon:'🖼️' },
+                { id:'ip10', name:'RPA業務自動化', cost:15e8, weeks:16, rev:32e6, risk:0.08, riskName:'導入失敗', icon:'⚙️' },
+            ],
+            log: [
+                { id:'lp1', name:'即日配送', cost:7e8, weeks:8, rev:10e6, risk:0.06, riskName:'人手不足', icon:'🚀' },
+                { id:'lp2', name:'冷凍チェーン', cost:10e8, weeks:12, rev:16e6, risk:0.07, riskName:'設備故障', icon:'❄️' },
+                { id:'lp3', name:'倉庫管理', cost:5e8, weeks:6, rev:7e6, risk:0.05, riskName:'災害', icon:'🏭' },
+                { id:'lp4', name:'国際輸送', cost:15e8, weeks:16, rev:35e6, risk:0.10, riskName:'関税・制裁', icon:'🚢' },
+                { id:'lp5', name:'ラストマイル配送', cost:3e8, weeks:4, rev:4e6, risk:0.04, riskName:'競合多', icon:'🛵' },
+                { id:'lp6', name:'産地直送ルート', cost:8e8, weeks:10, rev:13e6, risk:0.08, riskName:'天候', icon:'🌿' },
+                { id:'lp7', name:'自動搬送ロボ', cost:12e8, weeks:14, rev:22e6, risk:0.09, riskName:'技術トラブル', icon:'🤖' },
+                { id:'lp8', name:'エコ包装', cost:4e8, weeks:6, rev:5e6, risk:0.03, riskName:'コスト増', icon:'♻️' },
+                { id:'lp9', name:'店舗間物流最適化', cost:6e8, weeks:8, rev:9e6, risk:0.05, riskName:'システム障害', icon:'🔀' },
+                { id:'lp10', name:'ドローン配送', cost:20e8, weeks:20, rev:45e6, risk:0.12, riskName:'規制', icon:'🚁' },
+            ],
+            ins: [
+                { id:'np1', name:'火災保険', cost:4e8, weeks:6, rev:6e6, risk:0.08, riskName:'大規模災害', icon:'🔥' },
+                { id:'np2', name:'医療保険', cost:8e8, weeks:10, rev:14e6, risk:0.10, riskName:'パンデミック', icon:'🏥' },
+                { id:'np3', name:'企業賠償保険', cost:6e8, weeks:8, rev:10e6, risk:0.07, riskName:'大型訴訟', icon:'⚖️' },
+                { id:'np4', name:'自動車保険', cost:10e8, weeks:12, rev:22e6, risk:0.06, riskName:'事故増加', icon:'🚗' },
+                { id:'np5', name:'サイバー保険', cost:12e8, weeks:14, rev:28e6, risk:0.09, riskName:'大規模ハック', icon:'🛡️' },
+                { id:'np6', name:'店舗休業保険', cost:5e8, weeks:6, rev:8e6, risk:0.06, riskName:'長期休業', icon:'🏪' },
+                { id:'np7', name:'食品衛生保険', cost:3e8, weeks:4, rev:4.5e6, risk:0.07, riskName:'食中毒', icon:'🍽️' },
+                { id:'np8', name:'取締役保険(D&O)', cost:7e8, weeks:8, rev:12e6, risk:0.05, riskName:'スキャンダル', icon:'👔' },
+                { id:'np9', name:'為替ヘッジ保険', cost:9e8, weeks:10, rev:16e6, risk:0.06, riskName:'予測外れ', icon:'💱' },
+                { id:'np10', name:'M&A保険', cost:15e8, weeks:16, rev:35e6, risk:0.08, riskName:'買収失敗', icon:'🤝' },
+            ],
+            ad: [
+                { id:'ap1', name:'SNSマーケティング', cost:3e8, weeks:4, rev:5e6, risk:0.05, riskName:'アルゴ変更', icon:'📲' },
+                { id:'ap2', name:'インフルエンサー', cost:5e8, weeks:6, rev:9e6, risk:0.09, riskName:'スキャンダル', icon:'🌟' },
+                { id:'ap3', name:'動画広告制作', cost:7e8, weeks:8, rev:12e6, risk:0.07, riskName:'炎上', icon:'🎬' },
+                { id:'ap4', name:'ブランドコンサル', cost:10e8, weeks:12, rev:20e6, risk:0.06, riskName:'効果不明', icon:'💎' },
+                { id:'ap5', name:'デジタルサイネージ', cost:8e8, weeks:10, rev:15e6, risk:0.05, riskName:'設置場所不足', icon:'🖥️' },
+                { id:'ap6', name:'ポップアップストア', cost:4e8, weeks:4, rev:6e6, risk:0.04, riskName:'天候', icon:'🎪' },
+                { id:'ap7', name:'ロイヤリティプログラム', cost:6e8, weeks:8, rev:11e6, risk:0.05, riskName:'運用コスト', icon:'🎁' },
+                { id:'ap8', name:'クロスプロモーション', cost:5e8, weeks:6, rev:8e6, risk:0.06, riskName:'相手次第', icon:'🔗' },
+                { id:'ap9', name:'PRイベント企画', cost:9e8, weeks:10, rev:17e6, risk:0.07, riskName:'事故', icon:'🎤' },
+                { id:'ap10', name:'危機管理広報', cost:12e8, weeks:14, rev:26e6, risk:0.04, riskName:'対応遅れ', icon:'🚨' },
+            ],
+            sogo: [
+                { id:'sp1', name:'IPOアドバイザリー', cost:8e8, weeks:10, rev:15e6, risk:0.06, riskName:'案件不足', icon:'📈' },
+                { id:'sp2', name:'M&Aアドバイザリー', cost:12e8, weeks:14, rev:28e6, risk:0.08, riskName:'訴訟', icon:'🤝' },
+                { id:'sp3', name:'株式引受', cost:10e8, weeks:12, rev:20e6, risk:0.09, riskName:'相場急変', icon:'📊' },
+                { id:'sp4', name:'社債発行支援', cost:6e8, weeks:8, rev:10e6, risk:0.05, riskName:'債務不履行', icon:'📜' },
+                { id:'sp5', name:'ポートフォリオ管理', cost:7e8, weeks:8, rev:12e6, risk:0.06, riskName:'運用失敗', icon:'💰' },
+                { id:'sp6', name:'商品先物取引', cost:5e8, weeks:6, rev:8e6, risk:0.10, riskName:'暴落', icon:'☕' },
+                { id:'sp7', name:'不動産ファンド', cost:15e8, weeks:16, rev:30e6, risk:0.09, riskName:'不動産暴落', icon:'🏢' },
+                { id:'sp8', name:'ベンチャー投資', cost:20e8, weeks:20, rev:45e6, risk:0.12, riskName:'投資先倒産', icon:'🦄' },
+                { id:'sp9', name:'為替デリバティブ', cost:9e8, weeks:10, rev:16e6, risk:0.07, riskName:'予測外れ', icon:'💱' },
+                { id:'sp10', name:'敵対買収防衛顧問', cost:10e8, weeks:12, rev:22e6, risk:0.05, riskName:'利益相反', icon:'🛡️' },
+            ]
+        };
+        // 採用可能マトリックス: 各業種が採用できる提供元業種
+        const pkgAdoptMatrix = {
+            coffee: ['bank','it','log','ins','ad','sogo'],
+            bank: ['it','ins','ad','sogo'],
+            it: ['bank','log','ins','ad'],
+            log: ['bank','it','ins','ad'],
+            ins: ['bank','it','ad','sogo'],
+            ad: ['bank','it','ins'],
+            sogo: ['bank','it','ins','ad'],
+        };
+        // コーヒー企業が採用した場合の効果マッピング
+        const pkgCoffeeEffects = {
+            bp1:{fusionLimitUp:0.30}, bp2:{turnoverDown:0.20}, bp3:{priceUp:0.08}, bp4:{cashYield:0.003}, bp5:{overseasFeeDown:0.50},
+            bp6:{cashFlowUp:0.05}, bp7:{opCostDown:0.05}, bp8:{fusionLimitUp:1.0}, bp9:{trafficUp:0.05}, bp10:{decayDown:0.30},
+            ip1:{opCostDown:0.10}, ip2:{mgrStarUp:1}, ip3:{cyberDefense:0.80}, ip4:{hrDown:0.08}, ip5:{regularSpeedUp:1.5},
+            ip6:{cogsDown:0.12}, ip7:{devCostDown:0.25}, ip8:{cogsDown:0.10}, ip9:{appealUp:10}, ip10:{hqCostDown:0.20},
+            lp1:{openSpeedUp:2}, lp2:{foodStarUp:1}, lp3:{stockoutDown:0.60}, lp4:{overseasCostDown:0.20}, lp5:{deliveryUp:0.15},
+            lp6:{cogsDown:0.18}, lp7:{hrDown:0.12}, lp8:{decayDown:0.20}, lp9:{wasteDown:0.25}, lp10:{appealUp:15,deliveryUp:0.20},
+            np1:{disasterDown:0.50}, np2:{turnoverDown:0.15}, np3:{lawsuitDown:0.70}, np4:{logCostDown:0.10}, np5:{cyberCover:1.0},
+            np6:{closureCover:1.0}, np7:{foodAccDown:0.60}, np8:{tobDefDown:0.30}, np9:{fxDown:0.80}, np10:{tobLossRecover:0.50},
+            ap1:{awareSpeedUp:1.5}, ap2:{youthTraffic:0.12}, ap3:{tvEffectUp:1.8}, ap4:{awareCeilUp:15}, ap5:{billboardUp:2.0},
+            ap6:{awareBoost:10}, ap7:{churnDown:0.40}, ap8:{crossTraffic:0.08}, ap9:{ipoBoost:0.15}, ap10:{scandalDown:0.60},
+            sp1:{ipoSpeedUp:2,ipoBoost:0.10}, sp2:{tobDiscount:0.10}, sp3:{dilutionUp:0.20}, sp4:{rateDown:0.001}, sp5:{divUp:0.15},
+            sp6:{beanRiskDown:0.50}, sp7:{rentIncUp:0.20}, sp8:{vcAccess:true}, sp9:{fxHedge:1.0}, sp10:{tobDefDown:0.40,tobDefBoost:0.25},
+        };
         const mFirstNames = ["翔太", "健", "大樹", "拓也", "結衣", "美咲", "さくら", "彩", "Leon", "Sophia", "Wei", "Ji-hoon"];
         const mLastNames = ["佐藤", "鈴木", "高橋", "田中", "伊藤", "渡辺", "山本", "中村", "Smith", "Johnson", "Chen", "Kim"];
         const managerTypes = [
@@ -2187,6 +2306,8 @@
 
             let pRev = 0, pExp = 0, pDiv = 0, pTax = 0, pNet = 0, pPropInc = 0, pInflate = 0; window._pBrandRoyalty = 0;
             window._pCogs = 0; window._pSocialIns = 0; window._pRepair = 0; window._pConsumptionTax = 0; window._pUtility = 0;
+            // 📦 パッケージ効果を一括計算（毎週1回）
+            let _pkgFx = window.getPkgEffects(companies[0]);
             // 不動産コスト追跡
             window._pPropTax = 0; window._pMaintain = 0; window._pVacancy = 0; window._pRentTax = 0;
             window._pPropGross = 0; // 不動産粗収入
@@ -2454,6 +2575,12 @@
                         // stats[3] 魅力★ → 集客ボーナス（★5で+10%）
                         let _charmBonus = (s.hasManager && s.managerData?.stats) ? 1 + s.managerData.stats[3] * 0.02 : 1;
                         appeal *= trafficMult * syn.traffic * infraTrafficBonus * _charmBonus;
+                        // 📦 パッケージ効果: 魅力UP + 来客UP + 客単価UP
+                        if (_pkgFx.appealUp) appeal += _pkgFx.appealUp;
+                        if (_pkgFx.trafficUp) appeal *= (1 + _pkgFx.trafficUp);
+                        if (_pkgFx.deliveryUp) appeal *= (1 + _pkgFx.deliveryUp);
+                        if (_pkgFx.youthTraffic) appeal *= (1 + _pkgFx.youthTraffic);
+                        if (_pkgFx.crossTraffic) appeal *= (1 + _pkgFx.crossTraffic);
                         // 焙煎設備の魅力ボーナス（AI焙煎機+5%、世界最高峰+10%）
                         if (p._roasterAppealBonus > 0) appeal *= (1 + p._roasterAppealBonus);
                     } else {
@@ -2628,6 +2755,8 @@
                     let _curAware = p.brandAwareness[country] || 0;
                     // 比例減衰: 出店あり2%、なし5%、r9焙煎機0.5%
                     let _decayRate = p._roasterNoDecay ? 0.005 : (hasStore ? 0.02 : 0.05);
+                    // 📦 パッケージ効果: 知名度減衰軽減
+                    if (_pkgFx.decayDown) _decayRate *= (1 - Math.min(0.9, _pkgFx.decayDown));
                     let baseDecay = Math.max(0.1, _curAware * _decayRate);
                     p.brandAwareness[country] = Math.max(0, _curAware - baseDecay);
 
@@ -2657,7 +2786,10 @@
                         let _adExpense = Math.floor(totalSpend * 0.30); // 人件費等30%
                         adCo.lastExpense = (adCo.lastExpense || 0) + _adExpense;
                         adCo.lastProfit = adCo.lastRevenue - adCo.lastExpense;
-                        p.brandAwareness[country] = Math.min(100, (p.brandAwareness[country] || 0) + awarenessGain);
+                        // 📦 パッケージ効果: 知名度上昇速度UP + 天井UP
+                        if (_pkgFx.awareSpeedUp) awarenessGain *= _pkgFx.awareSpeedUp;
+                        let _awareCeil = 100 + (_pkgFx.awareCeilUp || 0);
+                        p.brandAwareness[country] = Math.min(_awareCeil, (p.brandAwareness[country] || 0) + awarenessGain);
                     }
                     if (week % 10 === 0 && (p.brandAwareness[country] || 0) > 0) {
                         let aw = Math.floor(p.brandAwareness[country]);
@@ -2843,6 +2975,8 @@
                         let b = companies.find(x => x.id === bId && !x.isBankrupt);
                         if (!b) continue;
                         let rate = b.loanRate || 0.005;
+                        // 📦 パッケージ効果: 金利削減
+                        if (c.id === 'player' && _pkgFx.rateDown) rate = Math.max(0.001, rate - _pkgFx.rateDown);
                         let intPay = Math.floor(c.bankDebts[bId] * rate);
                         let principalRepay = Math.max(1, Math.floor(c.bankDebts[bId] * 0.05));
                         let totalPay = intPay + principalRepay;
@@ -2923,6 +3057,13 @@
                             window._inflationLogShown = true;
                         }
                     }
+                }
+
+                // 📦 パッケージ効果: 資産運用益（プレイヤーのみ）
+                if (c.id === 'player' && _pkgFx.cashYield && c.cash > 0) {
+                    let _yield = Math.floor(c.cash * _pkgFx.cashYield);
+                    c.cash += _yield;
+                    pPropInc += _yield;
                 }
 
                 // ── 普通預金プラス金利 週+0.05% （銀行が払う）──
@@ -3366,12 +3507,17 @@
                             // 高満足: 常連増加（店長育成statボーナス）
                             let growthBonus = s.hasManager && s.managerData?.stats
                                 ? (1 + s.managerData.stats[2] * 0.1) * (1 + ((s.managerLevel||1)-1) * 0.15) : 1;
+                            // 📦 パッケージ効果: 常連増加速度UP
+                            if (c.id === 'player' && _pkgFx.regularSpeedUp) growthBonus *= _pkgFx.regularSpeedUp;
                             s.regulars = Math.min(maxRegulars, Math.floor((s.regulars || 0) + Math.ceil((s.traffic * 0.005) * growthBonus)));
                         } else if (sat >= 50) {
                             s.regulars = Math.min(maxRegulars, Math.floor((s.regulars || 0) + 1));
                         } else if (sat < 40) {
                             // 低満足: 常連離脱
-                            s.regulars = Math.max(0, Math.floor((s.regulars || 0) - Math.ceil((s.regulars || 0) * 0.05 + 1)));
+                            let _churnRate = 0.05;
+                            // 📦 パッケージ効果: 常連離脱率軽減
+                            if (c.id === 'player' && _pkgFx.churnDown) _churnRate *= (1 - _pkgFx.churnDown);
+                            s.regulars = Math.max(0, Math.floor((s.regulars || 0) - Math.ceil((s.regulars || 0) * _churnRate + 1)));
                         }
 
                         // 設備修繕費: 開店から52週（1年）後に発生開始、以降8週ごとに+5%（最大+40%）
@@ -3385,13 +3531,25 @@
                         let price = s.price || 1500; let rev = Math.floor(handledTraffic * price * (Math.random() * 0.2 + 0.9)); // finalTrafficからhandledTrafficに変更
                         // クライシスペナルティ
                         if (c.id === 'player') {
-                            if (p._scandalWeeks && week <= p._scandalWeeks) rev = Math.floor(rev * 0.5);
+                            if (p._scandalWeeks && week <= p._scandalWeeks) {
+                                let _scandalMult = 0.5; if (_pkgFx.scandalDown) _scandalMult = Math.min(0.95, 0.5 + _pkgFx.scandalDown * 0.5);
+                                rev = Math.floor(rev * _scandalMult);
+                            }
                             if (p._strikeWeeks && week <= p._strikeWeeks) rev = Math.floor(rev * 0.4);
-                            if (p._cyberStopWeeks && week <= p._cyberStopWeeks) rev = 0;
-                            if (s._disasterWeeks && week <= s._disasterWeeks) rev = Math.floor(rev * 0.5);
+                            if (p._cyberStopWeeks && week <= p._cyberStopWeeks) {
+                                if (_pkgFx.cyberDefense) rev = Math.floor(rev * (1 - _pkgFx.cyberDefense) * 0.2);
+                                else rev = 0;
+                            }
+                            if (s._disasterWeeks && week <= s._disasterWeeks) {
+                                let _disMult = 0.5; if (_pkgFx.disasterDown) _disMult = Math.min(0.95, 0.5 + _pkgFx.disasterDown);
+                                rev = Math.floor(rev * _disMult);
+                            }
                             // 為替ショック（海外店舗のみ）
                             if (p._forexShockWeeks && week <= p._forexShockWeeks) {
                                 let _fxRate = p._forexShockRate || 0.40;
+                                // 📦 パッケージ効果: 為替ヘッジ
+                                if (_pkgFx.fxHedge) _fxRate = 0;
+                                else if (_pkgFx.fxDown) _fxRate *= (1 - _pkgFx.fxDown);
                                 if (s.regionKey !== 'TOKYO' && s.regionKey !== 'OSAKA') rev = Math.floor(rev * (1 - _fxRate));
                             }
                         }
@@ -3404,7 +3562,20 @@
                             let _satMult = ((s.satisfaction || 60) / 100) * p._digitalEffects.satToSaleBonus;
                             rev = Math.floor(rev * (1 + _satMult));
                         }
+                        // 📦 パッケージ効果: 客単価UP
+                        if (c.id === 'player' && _pkgFx.priceUp) rev = Math.floor(rev * (1 + _pkgFx.priceUp));
+                        // 🏦 海外送金手数料: その国に口座がないと売上-3%
+                        if (c.id === 'player') {
+                            let _sCc = ({'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND'})[s.regionKey] || 'JP';
+                            if (!p.bankByCountry || !p.bankByCountry[_sCc]) {
+                                let _feeRate = 0.03;
+                                if (_pkgFx.overseasFeeDown) _feeRate *= (1 - _pkgFx.overseasFeeDown);
+                                rev = Math.floor(rev * (1 - _feeRate));
+                            }
+                        }
                         let baseSalary = 50000 * s.staffCount; if (s.hasManager && s.managerData) baseSalary += s.managerData.baseSalary;
+                        // 📦 パッケージ効果: 人件費削減
+                        if (c.id === 'player' && _pkgFx.hrDown) baseSalary = Math.floor(baseSalary * (1 - _pkgFx.hrDown));
                         if (c.id === 'player') {
                             // stats[1] 運営★ → 人件費削減（★5で-10%）
                             let _opsStat = s.hasManager && s.managerData?.stats ? s.managerData.stats[1] : 0;
@@ -3419,7 +3590,7 @@
                         let rd_cost = c.id === 'player' ? (roasterDefs.find(r => r.id === (p.roasterEquip || {}).id) || roasterDefs[0]) : roasterDefs[0];
                         let baseCogsRate = 0.28 - (rd_cost.tier || 0) * 0.02;
                         // 食品特化物流 + 運営stat → cogs削減
-                        if (c.id === 'player') baseCogsRate = Math.max(0.10, baseCogsRate - infraCogsDown);
+                        if (c.id === 'player') baseCogsRate = Math.max(0.10, baseCogsRate - infraCogsDown - (_pkgFx.cogsDown || 0));
                         // 社会保険料
                         let _playerStoreCount = c.id === 'player' ? p.stores.length : 0;
                         let _socialRate = c.id === 'player'
@@ -3858,7 +4029,11 @@
                     }
                     // 設備改修分割払い追跡
                     if (p._renovLeft > 0) window._pRenovPay = (window._pRenovPay || 0) + (p._renovWeekly || 0);
-                    if (typeof techMarketing !== 'undefined' && techMarketing) commonExp += 3000000; pExp += commonExp;
+                    if (typeof techMarketing !== 'undefined' && techMarketing) commonExp += 3000000;
+                    // 📦 パッケージ効果: HQコスト削減 + オペコスト削減
+                    if (_pkgFx.hqCostDown) commonExp = Math.floor(commonExp * (1 - _pkgFx.hqCostDown));
+                    if (_pkgFx.opCostDown) commonExp = Math.floor(commonExp * (1 - _pkgFx.opCostDown));
+                    pExp += commonExp;
                 }
                 prof -= commonExp;
 
@@ -4109,12 +4284,12 @@
                             }
                             buyer.cash -= 1000000; // 象徴的な買収費
                             c.parent = buyer.id;
-                            // 救済買収（第三者割当増資で55%付与）
+                            // 救済買収でも55%株式付与
                             if (!c.shareholders) c.shareholders = {};
-                            let oldShares = c.shares || 10000;
-                            let newTotal = Math.floor(oldShares / 0.45);
-                            let rescueShares = newTotal - oldShares;
-                            c.shares = newTotal;
+                            let rescueShares = Math.ceil((c.shares || 10000) * 0.55);
+                            for (let sid in c.shareholders) {
+                                c.shareholders[sid] = Math.floor(c.shareholders[sid] * 0.45);
+                            }
                             c.shareholders[buyer.id] = rescueShares;
                             // 傘下名を正しく付与
                             let _rescuedCleanName = c.name.replace(/\[.*?\]\s*/g,'');
@@ -4313,24 +4488,36 @@
                         let _buyProb = c.sector === 'sogo' ? ((_portSize < 5) ? 0.70 : 0.45) : 0.25;
                         // 20%未満の銘柄を優先買い増し（持分法収益獲得のため）
                         if (Math.random() < _buyProb && c.cash > 50000000) {
-                            let targetStake = (c.sector === 'bank' ? 0.05 : 0.10);
                             let underTarget = companies.filter(t =>
                                 t.id !== c.id && t.isPublic && !t.isBankrupt &&
-                                (t.shareholders[c.id] || 0) / Math.max(1, t.shares) < targetStake &&
-                                t.qNet > 0
+                                (t.shareholders[c.id] || 0) / Math.max(1, t.shares) < (t.id === 'player' ? 0.05 : 0.20) &&
+                                t.qNet > 0 &&
+                                window.getMarketShares(t) > 0
                             );
+                            // プレイヤー企業は外部株主合計40%まで制限
+                            underTarget = underTarget.filter(t => {
+                                if (t.id !== 'player') return true;
+                                let _extTotal = Object.keys(t.shareholders).filter(k => k !== 'player' && k !== 'market' && k !== t.id).reduce((s, k) => s + (t.shareholders[k] || 0), 0);
+                                return (_extTotal / Math.max(1, t.shares)) < 0.40;
+                            });
                             if (underTarget.length > 0) {
                                 let tgt = underTarget.sort((a, b) => (b.qNet || 0) - (a.qNet || 0))[0];
-                                let needPct = Math.floor(tgt.shares * targetStake);
+                                let maxPct = tgt.id === 'player' ? 0.05 : 0.20;
+                                let need = Math.floor(tgt.shares * maxPct);
                                 let nowHold = tgt.shareholders[c.id] || 0;
+                                let marketAvail = window.getMarketShares(tgt);
                                 let buyShares = Math.min(
-                                    Math.floor((needPct - nowHold) * (0.3 + Math.random() * 0.5)),
-                                    Math.floor(c.cash / (tgt.stockPrice || 100))
+                                    Math.floor((need - nowHold) * (0.3 + Math.random() * 0.5)),
+                                    Math.floor(c.cash / (tgt.stockPrice || 100)),
+                                    marketAvail
                                 );
                                 if (buyShares > 0 && c.cash >= buyShares * tgt.stockPrice) {
                                     let cost = buyShares * tgt.stockPrice;
                                     c.cash -= cost;
                                     tgt.shareholders[c.id] = nowHold + buyShares;
+                                    tgt.shareholders['market'] = Math.max(0, (tgt.shareholders['market'] || 0) - buyShares);
+                                    // プレイヤー企業への投資は企業のcashに加算
+                                    if (tgt.id === 'player') tgt.cash += cost;
                                     let newRatio = ((nowHold + buyShares) / tgt.shares * 100).toFixed(1);
                                     if (newRatio > 20) addLog(`【投資】${c.name.replace(/\[.*?\]\s*/, '')} が ${tgt.name.replace(/\[.*?\]\s*/, '')} を買い増し（${newRatio}%保有）`, 'normal', '市場');
                                 }
@@ -4730,6 +4917,8 @@
                 }
             });
 
+            // 📦 パッケージ効果: 配当収益UP
+            if (_pkgFx.divUp && pDiv > 0) pDiv = Math.floor(pDiv * (1 + _pkgFx.divUp));
             playerTotalDividends += pDiv; p.cash += pDiv;
             if (p.isPublic) {
                 let _pFloat = window.getFloatShares ? window.getFloatShares(p) : p.shares;
@@ -5301,8 +5490,10 @@
                         if (prop.coffeeTenant !== null && prop.coffeeTenant !== 1) {
                             // coffeeTenant===1はプレイヤー店舗。オーナーがプレイヤー自身なら内部取引なのでスキップ
                             if (!(prop.owner === 'player' && prop.coffeeTenant === 1)) {
-                                ownerCo.cash += prop.rent; ownerCo.qNet = (ownerCo.qNet || 0) + prop.rent;
-                                if (prop.owner === 'player') window._pPropGross = (window._pPropGross || 0) + prop.rent;
+                                let _rentAmt = prop.rent;
+                                if (prop.owner === 'player' && _pkgFx.rentIncUp) _rentAmt = Math.floor(_rentAmt * (1 + _pkgFx.rentIncUp));
+                                ownerCo.cash += _rentAmt; ownerCo.qNet = (ownerCo.qNet || 0) + _rentAmt;
+                                if (prop.owner === 'player') window._pPropGross = (window._pPropGross || 0) + _rentAmt;
                             }
                         }
                         if (prop.npcSlots > 0) {
@@ -5330,7 +5521,9 @@
                                     if (prop.owner === 'player') addLog(`【不動産】${departed} があなたのビルを退去しました。${rentRatio > 1.3 ? '(家賃が高すぎたようです)' : ''}`, 'warning', '不動産');
                                 }
                             }
-                            let _npcRentIncome = Math.floor(prop.rent * prop.occupiedNPCSlots); ownerCo.cash += _npcRentIncome; ownerCo.qNet = (ownerCo.qNet || 0) + _npcRentIncome;
+                            let _npcRentIncome = Math.floor(prop.rent * prop.occupiedNPCSlots);
+                            if (prop.owner === 'player' && _pkgFx.rentIncUp) _npcRentIncome = Math.floor(_npcRentIncome * (1 + _pkgFx.rentIncUp));
+                            ownerCo.cash += _npcRentIncome; ownerCo.qNet = (ownerCo.qNet || 0) + _npcRentIncome;
                             if (prop.owner === 'player') window._pPropGross = (window._pPropGross || 0) + _npcRentIncome;
                         }
 
@@ -5591,12 +5784,11 @@
 
                     } else if (elapsed >= 1 && elapsed <= 3 && Math.random() < 0.08 && !knightEvent) {
                         // ── ターゲット企業がホワイトナイトを要請 ──
-                        // 条件: ①ターゲットが時価総額5億以上 ②買収者が40%未満保有 ③プレイヤーが支配（50%超）していない
+                        // 条件: ①ターゲットが時価総額5億以上 ②買収者が40%未満保有
                         let bidderPct = (c.shareholders[tob.bidder] || 0) / c.shares;
                         let tooLate = bidderPct >= 0.40; // 手遅れ
-                        let playerControls = (c.shareholders['player'] || 0) / c.shares >= 0.50; // プレイヤー支配
                         let tooSmall = c.marketCap < 500000000; // 弱小は呼べない
-                        if (!tooLate && !tooSmall && !playerControls) {
+                        if (!tooLate && !tooSmall) {
                             let needed = tob.price * 1.15 * tob.targetShares;
                             // ターゲットより時価総額が大きい企業のみ対象
                             let biggerCos = companies.filter(k =>
@@ -5628,17 +5820,41 @@
                     // AI同士の場合はログのみ（モーダル表示なし）
                     let t = knightEvent.target, k = knightEvent.knight;
                     t.activeTOB_v2 = null;
-                    // 第三者割当増資（新株発行で55%付与）に変更
-                    let oldShares = t.shares || 10000;
-                    let newTotal = Math.floor(oldShares / 0.45);
-                    let _wnShares = newTotal - oldShares;
-                    t.shares = newTotal;
-                    t.shareholders[k.id] = (t.shareholders[k.id] || 0) + _wnShares;
-                    t.cash += Math.floor(_wnShares * t.stockPrice * 0.9);
+                    // 55%株式付与（救済買収と同じ）
+                    let _wnShares = Math.ceil((t.shares || 10000) * 0.55);
+                    for (let _sid in t.shareholders) { t.shareholders[_sid] = Math.floor((t.shareholders[_sid] || 0) * 0.45); }
+                    t.shareholders[k.id] = _wnShares;
                     t.parent = k.id;
                     t.name = `[${k.name.replace(/\[.*?\]\s*/g,'')}傘下] ${t.name.replace(/\[.*?\]\s*/g,'')}`;
                     addLog(`【買収防衛】${t.name.replace(/\[.*?\]\s*/g,'')} がホワイトナイト ${k.name.replace(/\[.*?\]\s*/g,'')} に救済合併。買収阻止。`, 'news', 'M&A');
                 }
+            }
+
+            // ── プレイヤーのパッケージ利用料（週次） ──
+            window._pPkgCost = 0;
+            let _p = companies[0];
+            if (_p._adoptedPkgs) {
+                Object.keys(_p._adoptedPkgs).forEach(pid => {
+                    let provId = _p._adoptedPkgs[pid];
+                    let prov = companies.find(cx => cx.id === provId);
+                    if (!prov || prov.isBankrupt || !prov._packages || prov._packages[pid]?.status !== 'ready') {
+                        delete _p._adoptedPkgs[pid]; return; // プロバイダー倒産→自動解約
+                    }
+                    let def = null;
+                    for (let sk in sectorPackages) { def = sectorPackages[sk].find(d => d.id === pid); if (def) break; }
+                    if (!def) return;
+                    // 価格競争による割引
+                    let competitors = companies.filter(cx => cx.sector === prov.sector && !cx.isBankrupt && cx._packages?.[pid]?.status === 'ready').length;
+                    let priceMult = competitors >= 3 ? 0.5 : competitors >= 2 ? 0.7 : competitors >= 1 ? 0.85 : 1.0;
+                    let cost = Math.floor(def.rev * priceMult);
+                    if (_p.cash >= cost) {
+                        _p.cash -= cost; pExp += cost;
+                        prov.cash += cost; prov.qNet = (prov.qNet||0) + cost;
+                        prov.lastRevenue = (prov.lastRevenue||0) + cost;
+                        prov.lastProfit = (prov.lastRevenue||0) - (prov.lastExpense||0);
+                        window._pPkgCost += cost;
+                    }
+                });
             }
 
             let currentProfit = pNet + pDiv + pPropInc + (window.weeklyStockSaleProfit || 0) + (window.weeklySiphonedCash || 0) + (window._pBrandRoyalty || 0) - totalInfraPaid;
@@ -5965,15 +6181,14 @@
                         if ((c.shareholders[c.id] || 0) > c.shares * 0.01) {
                             proposals.push({
                                 title: `💸 金庫株の市場放出`,
-                                desc: `保有している自社株（金庫株）の一部（最大5%）を市場に放出し、現金に換えます。需給悪化で株価は少し低下します。`,
+                                desc: `保有している自社株（金庫株）をすべて市場に放出し、現金に換えます。希薄化で株価は低下します。`,
                                 action: () => {
                                     let treasurySh = c.shareholders[c.id];
-                                    let sellAmt = Math.min(treasurySh, Math.max(1, Math.floor(c.shares * 0.05)));
-                                    let proceeds = sellAmt * c.stockPrice;
+                                    let proceeds = treasurySh * c.stockPrice;
                                     c.cash += proceeds;
-                                    c.shareholders[c.id] -= sellAmt;
-                                    c.stockPrice = Math.max(10, Math.floor((c.stockPrice||100) * 0.98));
-                                    addLog(`【金庫株放出】${c.name.replace(/\[.*?\]\s*/,'')} が金庫株 ${sellAmt.toLocaleString()}株を売却し、¥${Math.floor(proceeds/10000).toLocaleString()}万 を調達。`, 'normal', '財務');
+                                    c.shareholders[c.id] = 0;
+                                    c.stockPrice = Math.max(10, Math.floor((c.stockPrice||100) * 0.95));
+                                    addLog(`【金庫株放出】${c.name.replace(/\[.*?\]\s*/,'')} が金庫株 ${treasurySh.toLocaleString()}株を売却し、¥${Math.floor(proceeds/10000).toLocaleString()}万 を調達。`, 'normal', 'M&A');
                                 }
                             });
                         }
@@ -6179,6 +6394,118 @@
                     });
                 }
             }
+            // ═══ 📦 パッケージプラン: 開発進行 + 採用 + 収益計算 ═══
+            companies.forEach(c => {
+                if (c.isBankrupt || c.sector === 'coffee') return;
+                let secKey = c.sector;
+                if (!sectorPackages[secKey]) return;
+                if (!c._packages) c._packages = {}; // {pkgId: {status:'dev'|'ready', devWeek, clients:[]}}
+
+                // ── 開発中パッケージの進行 ──
+                Object.keys(c._packages).forEach(pid => {
+                    let pkg = c._packages[pid];
+                    if (pkg.status === 'dev' && week >= pkg.readyWeek) {
+                        pkg.status = 'ready';
+                        pkg.clients = [];
+                        let def = sectorPackages[secKey].find(d => d.id === pid);
+                        if (def) addLog(`【新サービス】${c.name.replace(/\[.*?\]\s*/g,'')} が「${def.name}」を市場投入。`, 'news', '経済', 3);
+                    }
+                });
+
+                // ── AI: 12週ごとに新パッケージ開発を検討 ──
+                if (c.id !== 'player' && week % 12 === 0 && c.cash > 0) {
+                    let available = sectorPackages[secKey].filter(d => !c._packages[d.id]);
+                    if (available.length > 0 && Math.random() < 0.40) {
+                        // 性格で選ぶ傾向: Aggressive=高コスト、Conservative=低コスト
+                        if (c.personality === 'Aggressive') available.sort((a,b) => b.cost - a.cost);
+                        else if (c.personality === 'Conservative') available.sort((a,b) => a.cost - b.cost);
+                        else available.sort(() => Math.random() - 0.5);
+                        let pick = available[0];
+                        if (c.cash >= pick.cost * 1.5) { // 開発費の1.5倍の余裕がある時だけ
+                            c.cash -= pick.cost;
+                            c._packages[pick.id] = { status: 'dev', devWeek: week, readyWeek: week + pick.weeks, clients: [] };
+                        }
+                    }
+                }
+
+                // ── 収益計算（完成パッケージ） ──
+                Object.keys(c._packages).forEach(pid => {
+                    let pkg = c._packages[pid];
+                    if (pkg.status !== 'ready') return;
+                    let def = sectorPackages[secKey].find(d => d.id === pid);
+                    if (!def) return;
+                    let clientCount = (pkg.clients || []).length;
+                    if (clientCount <= 0) return;
+                    // 同業種の競合パッケージ数で価格競争
+                    let competitors = companies.filter(cx => cx.id !== c.id && cx.sector === secKey && !cx.isBankrupt && cx._packages && cx._packages[pid]?.status === 'ready').length;
+                    let priceMult = competitors >= 3 ? 0.5 : competitors >= 2 ? 0.7 : competitors >= 1 ? 0.85 : 1.0;
+                    let weeklyRev = Math.floor(def.rev * clientCount * priceMult);
+                    c.cash += weeklyRev;
+                    c.qNet = (c.qNet || 0) + weeklyRev;
+                    c.lastRevenue = (c.lastRevenue || 0) + weeklyRev;
+                    c.lastProfit = (c.lastRevenue || 0) - (c.lastExpense || 0);
+                });
+
+                // ── リスクイベント（4週に1回） ──
+                if (week % 4 === 0) {
+                    Object.keys(c._packages).forEach(pid => {
+                        let pkg = c._packages[pid];
+                        if (pkg.status !== 'ready' || !pkg.clients || pkg.clients.length === 0) return;
+                        let def = sectorPackages[secKey].find(d => d.id === pid);
+                        if (!def) return;
+                        let riskBase = def.risk;
+                        if (c.personality === 'Aggressive') riskBase *= 1.5;
+                        else if (c.personality === 'Conservative') riskBase *= 0.5;
+                        let roll = Math.random();
+                        if (roll < riskBase * 0.3) {
+                            // 大事故: 賠償金 + 全クライアント解約
+                            let damage = Math.floor(def.cost * 0.5);
+                            c.cash -= damage;
+                            let lostClients = pkg.clients.length;
+                            pkg.clients = [];
+                            addLog(`【事故】${c.name.replace(/\[.*?\]\s*/g,'')} の「${def.name}」で${def.riskName}発生！${lostClients}社が解約。賠償¥${Math.floor(damage/1e4).toLocaleString()}万`, 'alert', '経済', 4);
+                        } else if (roll < riskBase) {
+                            // 小トラブル: 1-2社解約
+                            let lose = Math.min(pkg.clients.length, 1 + Math.floor(Math.random() * 2));
+                            pkg.clients.splice(0, lose);
+                        }
+                    });
+                }
+            });
+
+            // ── 採用判定（全企業が4週ごとにパッケージ採用を検討） ──
+            if (week % 4 === 0) {
+                companies.forEach(buyer => {
+                    if (buyer.isBankrupt) return;
+                    let buyerSec = buyer.sector;
+                    let canAdopt = pkgAdoptMatrix[buyerSec] || pkgAdoptMatrix['coffee'] || [];
+                    if (!buyer._adoptedPkgs) buyer._adoptedPkgs = {};
+
+                    canAdopt.forEach(provSec => {
+                        // この業種のready状態パッケージを持つ企業を探す
+                        let providers = companies.filter(pv => pv.sector === provSec && !pv.isBankrupt && pv._packages);
+                        providers.forEach(pv => {
+                            Object.keys(pv._packages).forEach(pid => {
+                                let pkg = pv._packages[pid];
+                                if (pkg.status !== 'ready') return;
+                                // 既に同じパッケージIDを他社から採用済みならスキップ
+                                if (buyer._adoptedPkgs[pid]) return;
+                                // 自社の子会社/親会社なら優先的に採用（80%）、それ以外は30%
+                                let isFamily = (pv.parent === buyer.id || buyer.parent === pv.id);
+                                let adoptProb = isFamily ? 0.80 : 0.30;
+                                // 買い手がplayerなら自動採用しない（UIで手動）
+                                if (buyer.id === 'player') return;
+                                if (Math.random() < adoptProb) {
+                                    buyer._adoptedPkgs[pid] = pv.id;
+                                    if (!pkg.clients) pkg.clients = [];
+                                    if (!pkg.clients.includes(buyer.id)) pkg.clients.push(buyer.id);
+                                }
+                            });
+                        });
+                    });
+                });
+            }
+
             // 📰 多様なニュース生成（業界動向・競合・達成・市場分析）
             if (!isGameOver) {
                 let p = companies[0];
@@ -6904,7 +7231,8 @@
                 { id: 'legend', icon: '💎', name: '伝説級' },
                 { id: 'tech', icon: '🛠️', name: '設備投資' },
                 { id: 'rival', icon: '🔍', name: '競合分析' },
-                { id: 'ad', icon: '📣', name: '広告' }
+                { id: 'ad', icon: '📣', name: '広告' },
+                { id: 'pkg', icon: '📦', name: 'サービス' }
             ];
             let rndTabs = cats.map(cat => `<button class="tab-btn ${window.currentRndCategory === cat.id ? 'active' : ''}" onclick="window.currentRndCategory='${cat.id}'; updateHQView();">${cat.icon} ${cat.name}</button>`).join('');
 
@@ -7080,6 +7408,124 @@
                 rndListHtml = '<div id="ad-section-root" style="min-height:200px;padding:20px;text-align:center;color:var(--text-mut);">広告セクション読み込み中...</div>';
             }
 
+            // 📦 サービスタブ: パッケージ採用UI
+            if (window.currentRndCategory === 'pkg') {
+                if (!window._pkgFilterSec) window._pkgFilterSec = 'all';
+                let p = companies[0];
+                if (!p._adoptedPkgs) p._adoptedPkgs = {};
+                let canAdopt = pkgAdoptMatrix['coffee'] || [];
+                let secNames = { bank:'🏦 銀行', it:'💻 IT', log:'🚚 物流', ins:'🛡️ 保険', ad:'📣 広告', sogo:'📊 証券' };
+
+                // 業種フィルター
+                let filterHtml = `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;">
+                    <button onclick="window._pkgFilterSec='all';updateHQView();" style="padding:4px 10px;border-radius:20px;border:none;cursor:pointer;font-size:10px;font-weight:700;background:${window._pkgFilterSec==='all'?'#1e293b':'#f1f5f9'};color:${window._pkgFilterSec==='all'?'#fff':'#64748b'};">全て</button>
+                    ${canAdopt.map(sec => `<button onclick="window._pkgFilterSec='${sec}';updateHQView();" style="padding:4px 10px;border-radius:20px;border:none;cursor:pointer;font-size:10px;font-weight:700;background:${window._pkgFilterSec===sec?'#1e293b':'#f1f5f9'};color:${window._pkgFilterSec===sec?'#fff':'#64748b'};">${secNames[sec]||sec}</button>`).join('')}
+                </div>`;
+
+                // 採用中のパッケージ数
+                let adoptedCount = Object.keys(p._adoptedPkgs).length;
+                let totalWeeklyCost = 0;
+                Object.keys(p._adoptedPkgs).forEach(pid => {
+                    for (let sk in sectorPackages) {
+                        let def = sectorPackages[sk].find(d => d.id === pid);
+                        if (def) { totalWeeklyCost += def.rev; break; }
+                    }
+                });
+
+                let summaryHtml = `<div style="background:#1e293b;border-radius:10px;padding:12px;margin-bottom:12px;display:flex;justify-content:space-around;color:#fff;font-size:11px;">
+                    <div style="text-align:center;"><div style="color:#94a3b8;">採用中</div><div style="font-size:16px;font-weight:900;">${adoptedCount}件</div></div>
+                    <div style="text-align:center;"><div style="color:#94a3b8;">週間コスト</div><div style="font-size:16px;font-weight:900;color:#f87171;">¥${Math.floor(totalWeeklyCost/1e4).toLocaleString()}万</div></div>
+                </div>`;
+
+                // パッケージリスト
+                let listItems = '';
+                let filteredSecs = window._pkgFilterSec === 'all' ? canAdopt : [window._pkgFilterSec];
+                filteredSecs.forEach(sec => {
+                    let pkgs = sectorPackages[sec] || [];
+                    // この業種でready状態パッケージを持つ企業を探す
+                    let providers = companies.filter(pv => pv.sector === sec && !pv.isBankrupt && pv._packages);
+
+                    pkgs.forEach(def => {
+                        // 利用可能なプロバイダー（このパッケージがready状態）
+                        let readyProviders = providers.filter(pv => pv._packages[def.id]?.status === 'ready');
+                        let devProviders = providers.filter(pv => pv._packages[def.id]?.status === 'dev');
+                        let isAdopted = !!p._adoptedPkgs[def.id];
+                        let adoptedFrom = isAdopted ? companies.find(x => x.id === p._adoptedPkgs[def.id]) : null;
+                        let effect = pkgCoffeeEffects[def.id] || {};
+                        let effectStr = Object.entries(effect).map(([k,v]) => {
+                            const labels = {
+                                fusionLimitUp:'融資枠+', turnoverDown:'離職率-', priceUp:'客単価+', cashYield:'運用益+', overseasFeeDown:'海外手数料-',
+                                cashFlowUp:'CF改善+', opCostDown:'オペコスト-', trafficUp:'来客+', decayDown:'知名度減衰-', mgrStarUp:'店長★+',
+                                cyberDefense:'サイバー防御', hrDown:'人件費-', regularSpeedUp:'常連速度×', cogsDown:'原価-', devCostDown:'開発費-',
+                                appealUp:'魅力+', hqCostDown:'HQ費-', openSpeedUp:'開店速度×', foodStarUp:'フード★+', stockoutDown:'在庫切れ-',
+                                overseasCostDown:'海外出店費-', deliveryUp:'デリバリー+', wasteDown:'廃棄-', disasterDown:'災害損害-',
+                                lawsuitDown:'訴訟損害-', logCostDown:'物流費-', cyberCover:'サイバー補償', closureCover:'休業補償',
+                                foodAccDown:'食品事故-', tobDefDown:'TOB防衛費-', fxDown:'為替損-', tobLossRecover:'TOB損失回収',
+                                awareSpeedUp:'知名度速度×', youthTraffic:'若年客+', tvEffectUp:'TV効果×', awareCeilUp:'知名度上限+',
+                                billboardUp:'看板効果×', awareBoost:'知名度即+', churnDown:'常連離脱-', crossTraffic:'相互送客+',
+                                ipoBoost:'IPO株価+', scandalDown:'不祥事損害-', ipoSpeedUp:'IPO審査速度×', tobDiscount:'TOBコスト-',
+                                dilutionUp:'増資効率+', rateDown:'金利-', divUp:'配当+', beanRiskDown:'豆価格リスク-',
+                                rentIncUp:'家賃収入+', vcAccess:'VC優先権', fxHedge:'為替ヘッジ', tobDefBoost:'防衛成功率+'
+                            };
+                            let l = labels[k] || k;
+                            return typeof v === 'boolean' ? l : l + (typeof v === 'number' && v < 1 ? Math.round(v*100)+'%' : v);
+                        }).join(' / ');
+
+                        let statusHtml = '';
+                        let actionBtn = '';
+                        if (isAdopted) {
+                            let provName = adoptedFrom ? adoptedFrom.name.replace(/\[.*?\]\s*/g,'').substring(0,12) : '?';
+                            let isSub = adoptedFrom?.parent === 'player';
+                            statusHtml = `<span style="background:#d1fae5;color:#065f46;font-size:9px;font-weight:900;padding:2px 8px;border-radius:10px;">✅ 採用中 (${isSub?'👑':''}${provName})</span>`;
+                            actionBtn = `<button onclick="cancelPkgAdopt('${def.id}')" style="padding:4px 10px;border:1px solid #fecaca;background:#fff;color:#ef4444;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;">解約</button>`;
+                        } else if (readyProviders.length > 0) {
+                            let opts = readyProviders.map(pv => {
+                                let isSub = pv.parent === 'player';
+                                let pvName = (isSub?'👑 ':'') + pv.name.replace(/\[.*?\]\s*/g,'').substring(0,12);
+                                let clients = (pv._packages[def.id].clients||[]).length;
+                                return `<option value="${pv.id}">${pvName} (${clients}社採用中)</option>`;
+                            }).join('');
+                            actionBtn = `<div style="display:flex;gap:4px;align-items:center;">
+                                <select id="pkg-prov-${def.id}" style="font-size:10px;padding:3px 6px;border-radius:6px;border:1px solid #e2e8f0;max-width:120px;">${opts}</select>
+                                <button onclick="adoptPkg('${def.id}')" style="padding:4px 10px;background:var(--primary);color:#fff;border:none;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;">採用</button>
+                            </div>`;
+                        } else if (devProviders.length > 0) {
+                            let nearestWeek = Math.min(...devProviders.map(pv => pv._packages[def.id].readyWeek));
+                            statusHtml = `<span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:900;padding:2px 8px;border-radius:10px;">🔧 開発中 (あと${Math.max(1,nearestWeek-week)}週)</span>`;
+                        } else {
+                            statusHtml = `<span style="background:#f1f5f9;color:#94a3b8;font-size:9px;font-weight:900;padding:2px 8px;border-radius:10px;">未開発</span>`;
+                        }
+
+                        // 競合数
+                        let competitorCount = companies.filter(cx => cx.sector === sec && !cx.isBankrupt && cx._packages?.[def.id]?.status === 'ready').length;
+
+                        listItems += `<div style="padding:12px;border-bottom:1px solid #f1f5f9;background:${isAdopted ? '#f0fdf4' : '#fff'};">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                                <div style="display:flex;align-items:center;gap:6px;">
+                                    <span style="font-size:18px;">${def.icon}</span>
+                                    <div>
+                                        <span style="font-weight:900;font-size:13px;">${def.name}</span>
+                                        <span style="font-size:9px;color:#94a3b8;margin-left:4px;">${secNames[sec]||sec}</span>
+                                    </div>
+                                </div>
+                                ${statusHtml}
+                            </div>
+                            <div style="font-size:10px;color:#64748b;margin-bottom:6px;">
+                                <span style="color:var(--primary);font-weight:700;">効果: ${effectStr || 'なし'}</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <div style="font-size:10px;color:#94a3b8;">
+                                    週¥${Math.floor(def.rev/1e4).toLocaleString()}万 | リスク:${def.riskName}(${Math.round(def.risk*100)}%) | 提供${competitorCount}社
+                                </div>
+                                ${actionBtn}
+                            </div>
+                        </div>`;
+                    });
+                });
+
+                rndListHtml = filterHtml + summaryHtml + '<div style="max-height:500px;overflow-y:auto;">' + (listItems || '<div style="padding:40px;text-align:center;color:#94a3b8;">利用可能なパッケージがありません。</div>') + '</div>';
+            }
+
             let _savedScrollHQ = container.scrollTop;
             let _savedPageY = window.scrollY;
             container.innerHTML = `<div class="flex-between" style="margin-bottom: 24px; border-bottom: 3px solid var(--primary); padding-bottom: 12px;"><h2 style="margin:0;"><span style="font-size:24px;">🏢</span> 本社・人事・R&D</h2></div><div class="card" style="background: var(--side); color: white; border:none;"><div class="flex-between" style="flex-wrap: wrap; gap: 15px;"><div><div style="display:flex; align-items:center; gap:12px; margin-bottom: 10px;"><span style="background: var(--gold); color: white; padding: 4px 12px; border-radius: 15px; font-weight: 900; font-size: 14px;">Level ${hqLevel}</span><span style="font-size: 20px; font-weight: 900; letter-spacing:1px;">Global Headquarters</span></div><div style="font-size: 13px; color: #94a3b8; display:flex; gap:15px; flex-wrap:wrap;"><span>📍 所在地: <b style="color:#fff;">${window.playerHQ.regionName} - ${window.playerHQ.distName}</b></span><span>💸 維持費: ${(baseCost / 10000).toLocaleString()}万円/週</span><span>👔 雇用枠: ${(hiredExecs || []).length} / ${hqLevel} 人</span></div></div><div style="display:flex; gap:10px;"><button class="btn-outline" style="background:rgba(255,255,255,0.1); color:#fff; border:none;" onclick="openHQRelocateModal()">移転</button><button class="btn-primary" style="background:var(--gold); box-shadow:0 4px 10px rgba(217,119,6,0.4);" onclick="upgradeHQ()">⭐ 設備拡張</button></div></div></div><h3 style="border-bottom: 2px solid var(--border); padding-bottom: 10px; margin-top:30px;">👔 役員人事 (タレント・マトリックス)</h3><div class="grid-4" style="margin-bottom:30px;">${execListHtml}</div><div id="hq-infra-placeholder"></div><h3 style="border-bottom: 2px solid var(--border); padding-bottom: 10px; margin-top:30px;">💡 イノベーション・ハブ・ラボ</h3><div class="region-tabs">${rndTabs}</div><div class="card" style="padding:0; border-radius:12px; overflow:hidden;"><div style="max-height: 500px; overflow-y: auto;">${rndListHtml}</div></div>`;
@@ -7147,8 +7593,10 @@
             let c = companies[0];
             let mData = coffeeMenus.find(m => m.id === mId);
             if (!mData) return;
-            // 農園直接契約で開発費-20%
+            // 農園直接契約で開発費-20% + 📦パッケージ効果
             let costMult = (c.bizOwned || []).includes('b6') ? 0.80 : 1.0;
+            let _devFx = window.getPkgEffects(c);
+            if (_devFx.devCostDown) costMult *= (1 - _devFx.devCostDown);
             let cost = Math.floor(mData.cost * costMult);
             if (c.cash < cost) return alert(`資金が足りません。開発には ¥${(cost / 10000).toLocaleString()}万 必要です。`);
             let bonus = getMenuBonus(mData, 1).toFixed(2);
@@ -7177,6 +7625,8 @@
             if (!c.menuStars) c.menuStars = {};
             if (!c.menuRenewCount) c.menuRenewCount = {};
             let costMult = (c.bizOwned || []).includes('b6') ? 0.80 : 1.0;
+            let _rnFx = window.getPkgEffects(c);
+            if (_rnFx.devCostDown) costMult *= (1 - _rnFx.devCostDown);
             let rc = c.menuRenewCount[mId] || 0;
             let base = MENU_BASE_RENEW_COST[mData.type] || 35000000;
             let cost = Math.floor((base + rc * MENU_RENEW_STEP) * costMult);
@@ -8207,15 +8657,36 @@ ${ds.desc}`)) {
             // ═══ タブ2-4: 既存の財務UI ═══
             let currentTax = Math.max(0, (playerLobbyBonusTurns > 0 ? 10 : globalTaxRate * 100) - (cfo ? cfo.level * 5 : 0));
 
-            // 🏦 【追加】残り週数の計算
+            // 🏦 国別銀行口座システム
+            if (!p.bankByCountry) p.bankByCountry = {};
+            const _bkCMap = { 'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND' };
+            const _bkCNames = { JP:'🇯🇵 日本', USA:'🇺🇸 米国', CHINA:'🇨🇳 中国', UK:'🇬🇧 英国', KOREA:'🇰🇷 韓国', AUS:'🇦🇺 豪州', CAN:'🇨🇦 加国', FRA:'🇫🇷 仏国', GER:'🇩🇪 独国', IND:'🇮🇳 印国' };
+            // 既存mainBankIdをJP口座に移行
+            if (p.mainBankId && !p.bankByCountry['JP']) p.bankByCountry['JP'] = p.mainBankId;
+            // 出店中の国リスト
+            let _bankCountries = [...new Set(p.stores.map(s => _bkCMap[s.regionKey]).filter(Boolean))];
+            if (_bankCountries.length === 0) _bankCountries = ['JP'];
+            if (!window._bankViewCountry || !_bankCountries.includes(window._bankViewCountry)) window._bankViewCountry = _bankCountries[0];
+            let _bvCountry = window._bankViewCountry;
+            let selectedBankId = p.bankByCountry[_bvCountry] || "";
+            // 後方互換
+            p.mainBankId = p.bankByCountry['JP'] || p.mainBankId || "";
+
+            // 国タブHTML
+            let _bankCountryTabs = `<div style="display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap;">` +
+                _bankCountries.map(cc => {
+                    let hasAccount = !!p.bankByCountry[cc];
+                    let isActive = cc === _bvCountry;
+                    return `<button onclick="window._bankViewCountry='${cc}';renderPortfolio();" style="padding:6px 12px;border-radius:8px;border:${isActive?'2px solid var(--primary)':'1px solid #e2e8f0'};background:${isActive?'#eff6ff':'#fff'};cursor:pointer;font-size:11px;font-weight:700;color:${isActive?'var(--primary)':'#64748b'};">
+                        ${_bkCNames[cc]||cc} ${hasAccount?'✅':'❌'}
+                    </button>`;
+                }).join('') + `</div>`;
+
             let bankStatusHtml = "";
-            if (p.mainBankId) {
+            if (selectedBankId) {
                 let elapsed = week - (p.lastBankChangeWeek || 0);
-                if (elapsed < 48) {
-                    bankStatusHtml = `<span style="font-size:11px; color:var(--danger); font-weight:bold; margin-left:10px;">⚠️ 移籍可能まで あと ${48 - elapsed}週</span>`;
-                } else {
-                    bankStatusHtml = `<span style="font-size:11px; color:var(--success); font-weight:bold; margin-left:10px;">✅ 移籍可能です</span>`;
-                }
+                if (elapsed < 48) bankStatusHtml = `<span style="font-size:11px; color:var(--danger); font-weight:bold; margin-left:10px;">⚠️ 移籍可能まで あと ${48 - elapsed}週</span>`;
+                else bankStatusHtml = `<span style="font-size:11px; color:var(--success); font-weight:bold; margin-left:10px;">✅ 移籍可能です</span>`;
             }
 
             let totalBuyPrice = 0, totalCurrentValue = 0, totalRentIncome = 0, myProps = [];
@@ -8228,9 +8699,10 @@ ${ds.desc}`)) {
                 }
             });
 
-            let selectedBankId = p.mainBankId || "";
-
+            // 国別に銀行をフィルター
+            let _countryBankMap = { JP:'JP', USA:'US', CHINA:'CN', UK:'GB', KOREA:'KR', AUS:'AU', CAN:'CA', FRA:'FR', GER:'DE', IND:'IN' };
             let bankOptions = companies.filter(c => c.sector === 'bank' || c.sector === 'finance' || c.name.includes('銀行'))
+                .filter(b => !_bvCountry || !b.country || b.country === _bvCountry || (_bvCountry === 'JP' && !b.country))
                 .map(b => {
                     let dRate = ((b.depositRate || 0.0005) * 100).toFixed(3);
                     let tdRate = ((b.termDepositRate || 0.003) * 100).toFixed(3);
@@ -8240,19 +8712,34 @@ ${ds.desc}`)) {
                     return `<option value="${b.id}" ${isSelected}>${b.name.replace(/\[.*?\]\s*/, '')} ${label} | 普通+${dRate}% 定期+${tdRate}% 借入-${lRate}%</option>`;
                 }).join('');
 
+            // 口座未開設の場合のUI
+            let _hasAccount = !!p.bankByCountry[_bvCountry];
+            let _noAccountHtml = !_hasAccount ? `
+                <div style="text-align:center;padding:30px 20px;background:#fefce8;border:2px dashed #fcd34d;border-radius:12px;margin-bottom:16px;">
+                    <div style="font-size:32px;margin-bottom:10px;">🏦</div>
+                    <div style="font-weight:900;font-size:14px;margin-bottom:6px;">${_bkCNames[_bvCountry]||_bvCountry} に口座がありません</div>
+                    <div style="font-size:11px;color:#92400e;margin-bottom:12px;">口座がないと、この国の店舗売上に毎週3%の海外送金手数料がかかります。</div>
+                    <div style="font-size:11px;color:#64748b;margin-bottom:12px;">開設費: ¥500万 / 開設まで2週間</div>
+                    <button onclick="openCountryBankAccount('${_bvCountry}')" class="btn-primary" style="padding:10px 24px;font-weight:900;"${p.cash < 5000000 ? ' disabled' : ''}>
+                        口座を開設する（¥500万）
+                    </button>
+                </div>` : '';
+
             container.innerHTML = tabHtml + `
                 <div style="display:${window._finTab === 'bank' ? 'block' : 'none'}">
                 <h3 style="margin-top:30px; border-bottom:2px solid var(--border); padding-bottom:10px;">
-                    🏦 メインバンク取引 ${bankStatusHtml}
+                    🏦 国別銀行取引 ${bankStatusHtml}
                 </h3>
-                <div class="card" style="background:#f9fafb; border-left:6px solid var(--primary);">
+                ${_bankCountryTabs}
+                ${_noAccountHtml}
+                ${_hasAccount ? `<div class="card" style="background:#f9fafb; border-left:6px solid var(--primary);">
                     <div class="flex-between" style="margin-bottom:15px;">
-                        <div style="font-weight:bold; color:var(--text-mut);">取引銀行の選択</div>
+                        <div style="font-weight:bold; color:var(--text-mut);">${_bkCNames[_bvCountry]||_bvCountry} の取引銀行</div>
                         <select id="player-bank-selector" style="width:60%; padding:8px; border-radius:6px; font-weight:bold; font-size:14px;" onchange="handleBankChangeTrigger(this.value)">
                             ${selectedBankId === "" ? '<option value="" disabled selected>銀行を選択してください</option>' : ''}
                             ${bankOptions}
                         </select>
-                    </div>
+                    </div>` : `<div class="card" style="display:none;">`}
                     <div id="bank-lock-warning" style="display:${p._bankSwitched ? 'block' : 'none'}; background:#f1f5f9; border:1px solid var(--border); border-radius:6px; padding:8px 12px; font-size:12px; font-weight:bold; color:var(--text-mut); margin-bottom:10px;">
                         🔒 銀行変更は1回のみ可能です（変更済み）
                     </div>
@@ -8264,6 +8751,9 @@ ${ds.desc}`)) {
                     if (p.creditRating === 'AAA') creditLimit *= 5;
                     else if (p.creditRating === 'AA') creditLimit *= 3;
                     else if (p.creditRating === 'A') creditLimit *= 2;
+                    // 📦 パッケージ効果: 融資枠拡大
+                    let _bFx = window.getPkgEffects(p);
+                    if (_bFx.fusionLimitUp) creditLimit = Math.floor(creditLimit * (1 + _bFx.fusionLimitUp));
                     let currentDebt = (p.bankDebts || {})[selBankId] || 0;
                     let canBorrow = Math.max(0, creditLimit - currentDebt);
                     let debtColor = currentDebt > creditLimit * 0.7 ? 'var(--danger)' : 'var(--success)';
@@ -8644,24 +9134,57 @@ ${ds.desc}`)) {
         // 🏦 銀行変更のトリガー（ここだけでアラート判定を行う）
         window.handleBankChangeTrigger = function (newBankId) {
             let p = companies[0];
-            if (p.mainBankId && p.mainBankId !== newBankId) {
-                // すでに1回変更済みの場合はブロック
-                if (p._bankSwitched) {
-                    document.getElementById('player-bank-selector').value = p.mainBankId;
-                    let warn = document.getElementById('bank-lock-warning');
-                    if (warn) {
-                        warn.style.display = 'block';
-                        warn.innerText = '🔒 銀行変更は1回のみ可能です（変更済み）';
-                    } else {
-                        alert('【銀行規制】銀行の変更は1回のみ可能です。');
-                    }
+            let _cc = window._bankViewCountry || 'JP';
+            if (!p.bankByCountry) p.bankByCountry = {};
+            let oldBankId = p.bankByCountry[_cc];
+            // 国内で銀行変更: 初回は無条件OK、2回目以降は制限
+            if (oldBankId && oldBankId !== newBankId) {
+                if (p['_bankSwitched_' + _cc]) {
+                    let sel = document.getElementById('player-bank-selector');
+                    if (sel) sel.value = oldBankId;
+                    alert(`【銀行規制】${_cc}での銀行変更は1回のみ可能です。`);
                     return;
                 }
+                p['_bankSwitched_' + _cc] = true;
             }
-            let warn = document.getElementById('bank-lock-warning');
-            if (warn) warn.style.display = 'none';
+            p.bankByCountry[_cc] = newBankId;
+            if (_cc === 'JP') p.mainBankId = newBankId;
+            // 預金口座を新銀行に移管
+            if (oldBankId && oldBankId !== newBankId && p.deposits && p.deposits[oldBankId]) {
+                let transferAmt = p.deposits[oldBankId];
+                p.deposits[newBankId] = (p.deposits[newBankId] || 0) + transferAmt;
+                delete p.deposits[oldBankId];
+                let oldBank = companies.find(b => b.id === oldBankId);
+                let newBank = companies.find(b => b.id === newBankId);
+                if (oldBank) oldBank.cash -= transferAmt;
+                if (newBank) newBank.cash += transferAmt;
+            }
             updateBankUI();
         };
+
+        // 🏦 国別口座開設
+        window.openCountryBankAccount = function (countryCode) {
+            let p = companies[0];
+            let cost = 5000000; // ¥500万
+            if (p.cash < cost) return alert('資金不足です。¥500万が必要です。');
+            if (!p.bankByCountry) p.bankByCountry = {};
+            // その国の銀行を探す
+            let _countryBanks = companies.filter(b => (b.sector === 'bank') && !b.isBankrupt && (b.country === countryCode || (!b.country && countryCode === 'JP')));
+            if (_countryBanks.length === 0) {
+                // その国に銀行がない場合、最寄りの銀行を使用
+                _countryBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt);
+            }
+            if (_countryBanks.length === 0) return alert('利用可能な銀行がありません。');
+            let selectedBank = _countryBanks[0];
+            if (!confirm(`${(window._bkCNames || {})[countryCode] || countryCode} に口座を開設します。\n銀行: ${selectedBank.name.replace(/\[.*?\]\s*/g,'')}\n開設費: ¥500万\n\n実行しますか？`)) return;
+            p.cash -= cost;
+            p.bankByCountry[countryCode] = selectedBank.id;
+            if (!p.deposits) p.deposits = {};
+            p.deposits[selectedBank.id] = (p.deposits[selectedBank.id] || 0);
+            addLog(`【口座開設】${(window._bkCNames || {})[countryCode] || countryCode} に銀行口座を開設しました。（${selectedBank.name.replace(/\[.*?\]\s*/g,'')}）`, 'success', '自社', 3);
+            renderPortfolio();
+        };
+        window._bkCNames = { JP:'🇯🇵 日本', USA:'🇺🇸 米国', CHINA:'🇨🇳 中国', UK:'🇬🇧 英国', KOREA:'🇰🇷 韓国', AUS:'🇦🇺 豪州', CAN:'🇨🇦 加国', FRA:'🇫🇷 仏国', GER:'🇩🇪 独国', IND:'🇮🇳 印国' };
 
         window.updateBorrowPreview = function () {
             let selectEl = document.getElementById('player-bank-selector');
@@ -8741,6 +9264,8 @@ ${ds.desc}`)) {
             } else if (action === 'borrow') {
                 let creditLimit = Math.max(100000000, p.stores.length * 80000000);
                 if (p.creditRating === "AAA") creditLimit *= 5; else if (p.creditRating === "AA") creditLimit *= 3; else if (p.creditRating === "A") creditLimit *= 2;
+                let _brFx = window.getPkgEffects(p);
+                if (_brFx.fusionLimitUp) creditLimit = Math.floor(creditLimit * (1 + _brFx.fusionLimitUp));
                 if (currentDebt + amount > creditLimit) { alert(`【融資審査落ち】信用枠（上限: ¥${creditLimit.toLocaleString()}）を超えています。`); return; }
                 p.cash += amount; p.bankDebts[bankId] = currentDebt + amount; bankCo.cash -= amount;
                 addLog(`【借入】${bankCo.name.replace(/\[.*?\]\s*/, '')} から ¥${amount.toLocaleString()} を借入しました。`, 'alert', '_財務');
@@ -8972,6 +9497,40 @@ ${ds.desc}`)) {
             }
             updateDashboard(); renderPortfolio();
         };
+        // 📦 パッケージ採用/解約
+        window.adoptPkg = function (pkgId) {
+            let p = companies[0];
+            if (!p._adoptedPkgs) p._adoptedPkgs = {};
+            let sel = document.getElementById('pkg-prov-' + pkgId);
+            if (!sel) return;
+            let provId = sel.value;
+            let prov = companies.find(c => c.id === provId);
+            if (!prov || !prov._packages || !prov._packages[pkgId] || prov._packages[pkgId].status !== 'ready') return alert('このサービスは現在利用できません。');
+            p._adoptedPkgs[pkgId] = provId;
+            if (!prov._packages[pkgId].clients) prov._packages[pkgId].clients = [];
+            if (!prov._packages[pkgId].clients.includes('player')) prov._packages[pkgId].clients.push('player');
+            let def = null;
+            for (let sk in sectorPackages) { def = sectorPackages[sk].find(d => d.id === pkgId); if (def) break; }
+            addLog(`【契約】${prov.name.replace(/\[.*?\]\s*/g,'')} の「${def ? def.name : pkgId}」を採用しました。週¥${def ? Math.floor(def.rev/1e4).toLocaleString() : '?'}万`, 'success', '自社', 3);
+            updateHQView();
+        };
+        window.cancelPkgAdopt = function (pkgId) {
+            let p = companies[0];
+            if (!p._adoptedPkgs || !p._adoptedPkgs[pkgId]) return;
+            let provId = p._adoptedPkgs[pkgId];
+            let prov = companies.find(c => c.id === provId);
+            if (prov && prov._packages && prov._packages[pkgId]) {
+                let clients = prov._packages[pkgId].clients || [];
+                let idx = clients.indexOf('player');
+                if (idx >= 0) clients.splice(idx, 1);
+            }
+            delete p._adoptedPkgs[pkgId];
+            let def = null;
+            for (let sk in sectorPackages) { def = sectorPackages[sk].find(d => d.id === pkgId); if (def) break; }
+            addLog(`【解約】「${def ? def.name : pkgId}」を解約しました。`, 'normal', '自社', 2);
+            updateHQView();
+        };
+
         // ✂️ 株式分割
         window.executeStockSplit = function (ratio) {
             let p = companies[0];
@@ -10493,7 +11052,7 @@ ${ds.desc}`)) {
                     let floatShares = 0;
                     for (let i = 0; i < shArray.length; i++) {
                         if (shArray[i].id === 'market') { floatShares += shArray[i].shares; totalHeld += shArray[i].shares; continue; }
-                        if (labels.length < 12) {
+                        if (labels.length < 6) {
                             let ownerCo = companies.find(c => c.id === shArray[i].id);
                             labels.push(shArray[i].id === 'player' ? '自社' : (ownerCo ? ownerCo.name.replace(/\[.*?\]\s*/, '').substring(0, 8) : shArray[i].id));
                             data.push(shArray[i].shares);
@@ -12948,13 +13507,10 @@ ${ds.desc}`)) {
             }
             if (!fightBack) {
                 t.activeTOB_v2.bidder = knightId; t.activeTOB_v2.price = counterPrice; t.stockPrice = counterPrice;
-                // TOB完了: ホワイトナイトが対象を買収（第三者割当増資で55%付与）
-                let oldShares = t.shares || 10000;
-                let newTotal = Math.floor(oldShares / 0.45);
-                let _wnShares2 = newTotal - oldShares;
-                t.shares = newTotal;
-                t.shareholders[k.id] = (t.shareholders[k.id] || 0) + _wnShares2;
-                t.cash += Math.floor(_wnShares2 * t.stockPrice * 0.9);
+                // TOB完了: ホワイトナイトが対象を買収（55%付与）
+                let _wnShares2 = Math.ceil((t.shares || 10000) * 0.55);
+                for (let _sid in t.shareholders) { t.shareholders[_sid] = Math.floor((t.shareholders[_sid] || 0) * 0.45); }
+                t.shareholders[k.id] = _wnShares2;
                 t.parent = k.id;
                 t.name = `[${k.name.replace(/\[.*?\]\s*/, '')}傘下] ${t.name.replace(/\[.*?\]\s*/, '')}`;
                 addLog(`【買収防衛】${t.name.replace(/\[.*?\]\s*/, '')}、友好企業 ${k.name.replace(/\[.*?\]\s*/, '')} に救済合併を要請。ホワイトナイトの対抗TOBにより買収計画が阻止された。`, 'alert', 'M&A');
