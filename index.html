@@ -1493,6 +1493,90 @@
             sp1:{ipoSpeedUp:2,ipoBoost:0.10}, sp2:{tobDiscount:0.10}, sp3:{dilutionUp:0.20}, sp4:{rateDown:0.001}, sp5:{divUp:0.15},
             sp6:{beanRiskDown:0.50}, sp7:{rentIncUp:0.20}, sp8:{vcAccess:true}, sp9:{fxHedge:1.0}, sp10:{tobDefDown:0.40,tobDefBoost:0.25},
         };
+
+        // ═══════════════════════════════════════
+        // 🏢 支店制度（海外進出に支店設立が必要）
+        // ═══════════════════════════════════════
+        const regionCountryMap = { 'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND' };
+        const countryRegions = { JP:['TOKYO','OSAKA'], USA:['USA'], CHINA:['CHINA'], UK:['UK'], KOREA:['KOREA'], AUS:['AUSTRALIA'], CAN:['CANADA'], FRA:['FRANCE'], GER:['GERMANY'], IND:['INDIA'] };
+        window.canOpenStoreInCountry = function(co, regionKey) {
+            let country = regionCountryMap[regionKey] || 'JP';
+            let homeCountry = co.country || 'JP';
+            if (country === homeCountry) return true;
+            if (!co._branches) return false;
+            let branch = co._branches[country];
+            if (!branch || (Array.isArray(branch) && branch.length === 0)) return false;
+            let storesInCountry = (co.stores || []).filter(s => (regionCountryMap[s.regionKey] || 'JP') === country).length;
+            let branchCount = Array.isArray(branch) ? branch.length : 1;
+            return storesInCountry < branchCount * 10;
+        };
+        window.establishBranch = function(co, regionKey) {
+            let country = regionCountryMap[regionKey] || 'JP';
+            let targetRegions = countryRegions[country] || [regionKey];
+            let candidates = [];
+            targetRegions.forEach(rk => {
+                if (!globalNetworkData[rk]) return;
+                globalNetworkData[rk].districts.forEach(d => {
+                    d.properties.forEach((p, idx) => {
+                        if (p.occupiedNPCSlots < p.npcSlots) candidates.push({rk, distName: d.name, prop: p, idx});
+                    });
+                });
+            });
+            if (candidates.length === 0) return false;
+            candidates.sort((a, b) => a.prop.rent - b.prop.rent);
+            let target = candidates[0];
+            let cost = target.prop.rent * 8;
+            if (co.cash < cost) return false;
+            co.cash -= cost;
+            target.prop.occupiedNPCSlots++;
+            if (!co._branches) co._branches = {};
+            if (!co._branches[country]) co._branches[country] = [];
+            co._branches[country].push({rk: target.rk, distName: target.distName, pIdx: target.idx, rent: target.prop.rent});
+            if (target.prop.owner) {
+                let owner = target.prop.owner === 'player' ? companies[0] : companies.find(c => c.id === target.prop.owner);
+                if (owner) owner.cash += cost;
+            }
+            // 🏦 支店設立時に自動で現地銀行口座を開設
+            if (!co.bankByCountry) co.bankByCountry = {};
+            if (!co.bankByCountry[country]) {
+                let _localBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt && (b.country === country || (!b.country && country === 'JP')));
+                if (_localBanks.length === 0) _localBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt);
+                if (_localBanks.length > 0) {
+                    let _bank = _localBanks[Math.floor(Math.random() * _localBanks.length)];
+                    co.bankByCountry[country] = _bank.id;
+                    if (!co.deposits) co.deposits = {};
+                    co.deposits[_bank.id] = (co.deposits[_bank.id] || 0);
+                }
+            }
+            return { country, distName: target.distName, rent: target.prop.rent, cost };
+        };
+        // 支店の週次家賃支払い（毎週処理で呼ぶ）
+        window.payBranchRents = function(co) {
+            if (!co._branches) return 0;
+            let totalRent = 0;
+            Object.keys(co._branches).forEach(country => {
+                let branches = co._branches[country];
+                if (!Array.isArray(branches)) return;
+                branches.forEach(br => {
+                    let rent = br.rent || 0;
+                    if (co.cash >= rent) {
+                        co.cash -= rent; totalRent += rent;
+                        if (br.rk && globalNetworkData[br.rk]) {
+                            let dist = globalNetworkData[br.rk].districts.find(d => d.name === br.distName);
+                            if (dist) {
+                                let prop = dist.properties[br.pIdx];
+                                if (prop && prop.owner) {
+                                    let owner = prop.owner === 'player' ? companies[0] : companies.find(c => c.id === prop.owner);
+                                    if (owner) { owner.cash += rent; if (prop.owner === 'player') window._pPropGross = (window._pPropGross||0) + rent; }
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+            return totalRent;
+        };
+
         const mFirstNames = ["翔太", "健", "大樹", "拓也", "結衣", "美咲", "さくら", "彩", "Leon", "Sophia", "Wei", "Ji-hoon"];
         const mLastNames = ["佐藤", "鈴木", "高橋", "田中", "伊藤", "渡辺", "山本", "中村", "Smith", "Johnson", "Chen", "Kim"];
         const managerTypes = [
@@ -2415,12 +2499,15 @@
                             if (portion > 0) { c.deposits[b.id] = (c.deposits[b.id] || 0) + portion; b.cash += portion; }
                         });
                         c.mainBankId = shuffled[0].id;
+                        // 🏦 国別口座を初期化（本国の銀行を自動設定）
+                        if (!c.bankByCountry) c.bankByCountry = {};
+                        c.bankByCountry[c.country || 'JP'] = shuffled[0].id;
                     }
                     // AIコーヒー屋の初期2店舗保証
                     if (c.sector === 'coffee' && c.id !== 'player') {
                         let targetStores = 2 - c.stores.length;
                         for (let i = 0; i < targetStores; i++) {
-                            let props = []; Object.keys(globalNetworkData).forEach(rk => { globalNetworkData[rk].districts.forEach((dist) => { dist.properties.forEach((prop, pIdx) => { if (prop.coffeeTenant === null) props.push({ rk, distName: dist.name, prop, pIdx }); }); }); });
+                            let props = []; Object.keys(globalNetworkData).forEach(rk => { globalNetworkData[rk].districts.forEach((dist) => { dist.properties.forEach((prop, pIdx) => { if (prop.coffeeTenant === null && window.canOpenStoreInCountry(c, rk)) props.push({ rk, distName: dist.name, prop, pIdx }); }); }); });
                             if (props.length > 0) { let t = props[Math.floor(Math.random() * props.length)]; let _aiInitCost = t.prop.rent * 2; t.prop.coffeeTenant = 2; let s = new Store(`[${t.distName}] ${t.prop.type}`, t.prop.rent, t.prop.traffic, t.prop.owner, t.prop.id, t.rk, t.distName, t.pIdx); s.price = 1200; if (Math.random() < 0.3 && window.managerTypes) { s.hasManager = true; s.managerData = window.managerTypes[Math.floor(Math.random() * window.managerTypes.length)]; } c.stores.push(s); if (typeof window.payStoreBuildRoyalty === 'function') window.payStoreBuildRoyalty(c, _aiInitCost); }
                             // AIメニュー星初期化
                             if (!c.menuStars) c.menuStars = {};
@@ -3018,43 +3105,47 @@
                     }
                 }
 
-                // ── 手元資金インフレ税 週-0.1% （国庫消滅・誰の収益にもならない）──
-                // ── 手元資金維持費 週-0.1% （口座のあるメインバンクの収益になる）──
-                if (c.cash > 0 && c.sector !== 'bank') { // 銀行はインフレ税免除
-                    let inflate = Math.floor(c.cash * 0.001);
+                // ── 手元資金減衰: 0.05%/週（国庫消滅・インフレ相当）──
+                if (c.cash > 0 && c.sector !== 'bank' && !c.isBankrupt) {
+                    let inflate = Math.floor(c.cash * 0.0005); // 0.05%
                     c.cash -= inflate;
+                    if (c.id === 'player' && inflate > 0) {
+                        pInflate += inflate;
+                        if (!window._inflationLogShown) {
+                            addLog(`【現金減衰】手元資金は毎週0.05%がインフレにより目減りします。銀行預金に入れると維持費0.01%で済みます。`, 'alert', '財務');
+                            window._inflationLogShown = true;
+                        }
+                    }
+                }
 
-                    // ▼ 追加：引かれた分を口座のある銀行の利益（現金と業績）に加算 ▼
+                // ── 口座維持費: 各銀行の普通預金×0.01%/週 → 銀行の収益 ──
+                if (c.sector !== 'bank' && !c.isBankrupt) {
                     if (!c.deposits) c.deposits = {};
-                    let mainBankId = Object.keys(c.deposits)[0] || (c.id === 'player' ? companies[0].mainBankId : null);
-
-                    // まだメインバンクがない場合は、同じ国の稼働中銀行から自動割り当て
-                    if (!mainBankId) {
+                    let _totalAccFee = 0;
+                    for (let bId in c.deposits) {
+                        let dep = c.deposits[bId] || 0;
+                        if (dep <= 0) continue;
+                        let fee = Math.floor(dep * 0.0001); // 0.01%
+                        if (fee <= 0) continue;
+                        c.deposits[bId] -= fee;
+                        _totalAccFee += fee;
+                        let bank = companies.find(b => b.id === bId && !b.isBankrupt);
+                        if (bank) {
+                            bank.cash += fee;
+                            bank.qNet = (bank.qNet || 0) + fee;
+                            bank.lastRevenue = (bank.lastRevenue || 0) + fee;
+                        }
+                    }
+                    // まだどの銀行にも口座がない場合は自動開設
+                    if (Object.keys(c.deposits).length === 0) {
                         let cCountry = c.country || 'JP';
                         let availableBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt && (b.country === cCountry || !b.country));
                         if (availableBanks.length > 0) {
-                            mainBankId = availableBanks[Math.floor(Math.random() * availableBanks.length)].id;
-                            c.deposits[mainBankId] = 0; // 口座開設（初期残高0）
-                            if (c.id === 'player') companies[0].mainBankId = mainBankId;
-                        }
-                    }
-
-                    if (mainBankId) {
-                        let bank = companies.find(b => b.id === mainBankId && !b.isBankrupt);
-                        if (bank) {
-                            bank.cash += inflate;
-                            bank.qNet = (bank.qNet || 0) + inflate;
-                            bank.lastRevenue = (bank.lastRevenue || 0) + inflate;
-                        }
-                    }
-
-                    // プレイヤーの場合は費用として記録
-                    if (c.id === 'player' && inflate > 0) {
-                        pInflate += inflate;
-                        // 初回のみヒントログ
-                        if (!window._inflationLogShown) {
-                            addLog(`【現金保有コスト】手元資金は毎週0.1%目減りし、口座のある銀行の収益となります。`, 'alert', '財務');
-                            window._inflationLogShown = true;
+                            let _autoBank = availableBanks[Math.floor(Math.random() * availableBanks.length)];
+                            c.deposits[_autoBank.id] = 0;
+                            if (c.id === 'player') companies[0].mainBankId = _autoBank.id;
+                            if (!c.bankByCountry) c.bankByCountry = {};
+                            c.bankByCountry[cCountry] = _autoBank.id;
                         }
                     }
                 }
@@ -3066,42 +3157,43 @@
                     pPropInc += _yield;
                 }
 
-                // ── 普通預金プラス金利 週+0.05% （銀行が払う）──
-                for (let bId in c.deposits) {
-                    if ((c.deposits[bId] || 0) > 0) {
-                        let b = companies.find(x => x.id === bId);
-                        const DEMAND_RATE = 0.0005; // 週+0.05%
-                        let interest = Math.floor(c.deposits[bId] * DEMAND_RATE);
-                        c.deposits[bId] += interest;
-                        if (b) {
-                            if (b.cash >= interest) {
-                                b.cash -= interest;
-                            } else {
-                                // 利息払えない場合は払える分だけ
-                                let payable = Math.max(0, b.cash);
-                                c.deposits[bId] -= (interest - payable); // 未払い分は預金残高から相殺
-                                b.cash = 0;
-                                b._liquidityStress = (b._liquidityStress || 0) + 1;
-                            }
-                        } // 銀行が支払う
-                        if (c.id === 'player') pPropInc += interest;
+                // ── 普通預金利息: 年1回（52週ごと）銀行の金利で支払い ──
+                if (week > 1 && week % 52 === 0 && c.sector !== 'bank') {
+                    for (let bId in c.deposits) {
+                        if ((c.deposits[bId] || 0) <= 0) continue;
+                        let b = companies.find(x => x.id === bId && !x.isBankrupt);
+                        if (!b) continue;
+                        let annualRate = b.depositRate || 0.0005; // 銀行ごとの年利
+                        let interest = Math.floor(c.deposits[bId] * annualRate * 52); // 年利×52週分
+                        if (interest <= 0) continue;
+                        if (b.cash >= interest) {
+                            c.deposits[bId] += interest;
+                            b.cash -= interest;
+                        } else {
+                            let payable = Math.max(0, b.cash);
+                            c.deposits[bId] += payable;
+                            b.cash = 0;
+                            b._liquidityStress = (b._liquidityStress || 0) + 1;
+                        }
+                        if (c.id === 'player') {
+                            pPropInc += interest;
+                            addLog(`【年次利息】${b.name.replace(/\[.*?\]\s*/g,'')} から預金利息 ¥${Math.floor(interest/1e4).toLocaleString()}万 を受領。`, 'success', '財務');
+                        }
                     }
                 }
 
-                // ── 定期預金: 満期処理（週+0.3%を48週複利）──
+                // ── 定期預金: 3年ロック（156週）・維持費なし・満期で利息一括 ──
                 c.termDeposits = (c.termDeposits || []).filter(td => {
-                    if (week - td.startWeek >= 48) {
-                        let totalReturn = td.amount + Math.floor(td.amount * (td.rate || 0.003) * 48);
+                    let lockWeeks = td.lockWeeks || 156; // 新規は156週、旧データは48週のまま
+                    if (week - td.startWeek >= lockWeeks) {
+                        let totalReturn = td.amount + Math.floor(td.amount * (td.rate || 0.003) * lockWeeks);
                         let b = companies.find(x => x.id === td.bankId);
-                        // 銀行の流動性チェック
                         if (b && b.cash < totalReturn) {
-                            // 払えない分だけ支払い、残りは元本のみ返還
                             let canPay = Math.max(0, b.cash);
                             let shortfall = totalReturn - canPay;
-                            totalReturn = canPay + td.amount; // 利息はカットして元本優先
+                            totalReturn = canPay + td.amount;
                             if (shortfall > td.amount * 0.1) {
                                 addLog(`【銀行流動性危機】${b.name.replace(/\[.*?\]\s*/,'')} が定期預金の満期支払いに一部不足！`, 'alert', '経済');
-                                // 取り付け騒ぎイベントのトリガーフラグ
                                 b._liquidityStress = (b._liquidityStress || 0) + 1;
                                 if (b._liquidityStress >= 3 && !window._sectorCrisis?.pending) {
                                     window._sectorCrisis = window._sectorCrisis || {};
@@ -3113,9 +3205,9 @@
                         c.cash += totalReturn;
                         if (b) b.cash = Math.max(0, b.cash - totalReturn);
                         if (c.id === 'player') {
-                            let earned = Math.floor(td.amount * (td.rate || 0.003) * 48);
+                            let earned = Math.floor(td.amount * (td.rate || 0.003) * lockWeeks);
                             pPropInc += earned;
-                            addLog(`【定期預金満期】¥${td.amount.toLocaleString()} が満期に。利息込み ¥${totalReturn.toLocaleString()} を受け取りました。`, 'success', '財務');
+                            addLog(`【定期預金満期】¥${Math.floor(td.amount/1e4).toLocaleString()}万 が満期。利息 ¥${Math.floor(earned/1e4).toLocaleString()}万 を受取。`, 'success', '財務');
                         }
                         return false;
                     }
@@ -3343,9 +3435,20 @@
                             let emptyProps = [];
                             Object.keys(globalNetworkData).forEach(rk => {
                                 globalNetworkData[rk].districts.forEach(d => {
-                                    d.properties.forEach((p, idx) => { if (p.coffeeTenant === null) emptyProps.push({rk, d, p, idx}); });
+                                    d.properties.forEach((p, idx) => {
+                                        if (p.coffeeTenant === null && window.canOpenStoreInCountry(c, rk)) emptyProps.push({rk, d, p, idx});
+                                    });
                                 });
                             });
+                            // 本国に空きがなければ支店設立を試みる
+                            if (emptyProps.length === 0 && c.cash > c.marketCap * 0.3) {
+                                let foreignRks = Object.keys(globalNetworkData).filter(rk => (regionCountryMap[rk]||'JP') !== (c.country||'JP'));
+                                if (foreignRks.length > 0) {
+                                    let targetRk = foreignRks[Math.floor(Math.random() * foreignRks.length)];
+                                    let result = window.establishBranch(c, targetRk);
+                                    if (result) addLog(`【海外進出】${c.name.replace(/\[.*?\]\s*/g,'')} が${result.country}に支店設立。`, 'news', '競合', 2);
+                                }
+                            }
                             if (emptyProps.length > 0) {
                                 let t = emptyProps[Math.floor(Math.random() * emptyProps.length)];
                                 let cost = t.p.rent * 2;
@@ -3359,6 +3462,13 @@
                     }
                 }
 
+                // ── 支店家賃の支払い（全企業） ──
+                if (c._branches && !c.isBankrupt) {
+                    let _brRent = window.payBranchRents(c);
+                    if (c.id === 'player') { pExp += _brRent; }
+                    else { c.lastExpense = (c.lastExpense || 0) + _brRent; c.lastProfit = (c.lastRevenue || 0) - (c.lastExpense || 0); }
+                }
+
                 // ── AI: 余剰資金を定期預金に自動積立（12週ごと）──
                 if (c.id !== 'player' && c.sector !== 'bank' && !c.isBankrupt && week % 12 === 0) {
                     let availBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt);
@@ -3370,7 +3480,7 @@
                         if (tdAmount > 10000000) {
                             c.cash -= tdAmount;
                             bestBank.cash += tdAmount;
-                            c.termDeposits.push({ bankId: bestBank.id, amount: tdAmount, startWeek: week, rate: bestBank.termDepositRate || 0.003 });
+                            c.termDeposits.push({ bankId: bestBank.id, amount: tdAmount, startWeek: week, rate: bestBank.termDepositRate || 0.003, lockWeeks: 156 });
                         }
                     }
                 }
@@ -3411,6 +3521,8 @@
                                 if (portion > 0) { c.deposits[b.id] = (c.deposits[b.id] || 0) + portion; b.cash += portion; }
                             });
                             if (!c.mainBankId) c.mainBankId = picks[0].id;
+                            if (!c.bankByCountry) c.bankByCountry = {};
+                            if (!c.bankByCountry[c.country || 'JP']) c.bankByCountry[c.country || 'JP'] = picks[0].id;
                         }
                     }
                 });
@@ -3564,13 +3676,18 @@
                         }
                         // 📦 パッケージ効果: 客単価UP
                         if (c.id === 'player' && _pkgFx.priceUp) rev = Math.floor(rev * (1 + _pkgFx.priceUp));
-                        // 🏦 海外送金手数料: その国に口座がないと売上-3%
-                        if (c.id === 'player') {
+                        // 🏦 海外送金手数料: その国に口座がないと売上-3%（全企業共通）
+                        {
                             let _sCc = ({'TOKYO':'JP','OSAKA':'JP','USA':'USA','CHINA':'CHINA','UK':'UK','KOREA':'KOREA','AUSTRALIA':'AUS','CANADA':'CAN','FRANCE':'FRA','GERMANY':'GER','INDIA':'IND'})[s.regionKey] || 'JP';
-                            if (!p.bankByCountry || !p.bankByCountry[_sCc]) {
-                                let _feeRate = 0.03;
-                                if (_pkgFx.overseasFeeDown) _feeRate *= (1 - _pkgFx.overseasFeeDown);
-                                rev = Math.floor(rev * (1 - _feeRate));
+                            let _homeC = c.country || 'JP';
+                            if (_sCc !== _homeC) {
+                                if (!c.bankByCountry) c.bankByCountry = {};
+                                if (!c.bankByCountry[_homeC] && c.mainBankId) c.bankByCountry[_homeC] = c.mainBankId;
+                                if (!c.bankByCountry[_sCc]) {
+                                    let _feeRate = 0.03;
+                                    if (c.id === 'player' && _pkgFx.overseasFeeDown) _feeRate *= (1 - _pkgFx.overseasFeeDown);
+                                    rev = Math.floor(rev * (1 - _feeRate));
+                                }
                             }
                         }
                         let baseSalary = 50000 * s.staffCount; if (s.hasManager && s.managerData) baseSalary += s.managerData.baseSalary;
@@ -4894,7 +5011,20 @@
                     c._brandBonus = 1.0 + Math.min(0.5, (c.marketCap || 0) / 20000000000);
                     let spawnProb = c.stores.length === 0 ? 0.8 : 0.2;
                     if (c.cash > 10000000 && Math.random() < spawnProb) {
-                        let props = []; Object.keys(globalNetworkData).forEach(rk => { globalNetworkData[rk].districts.forEach(dist => { dist.properties.forEach((prop, idx) => { if (prop.coffeeTenant === null) props.push({ rk, distName: dist.name, prop, idx }); }); }); });
+                        let props = []; Object.keys(globalNetworkData).forEach(rk => { globalNetworkData[rk].districts.forEach(dist => { dist.properties.forEach((prop, idx) => { if (prop.coffeeTenant === null && window.canOpenStoreInCountry(c, rk)) props.push({ rk, distName: dist.name, prop, idx }); }); }); });
+                        // 空きがなければ海外支店設立を検討
+                        if (props.length === 0 && c.stores.length >= 3 && c.cash > 50000000) {
+                            let foreignRks = Object.keys(globalNetworkData).filter(rk => (regionCountryMap[rk]||'JP') !== (c.country||'JP'));
+                            if (foreignRks.length > 0) {
+                                let targetRk = foreignRks[Math.floor(Math.random() * foreignRks.length)];
+                                let result = window.establishBranch(c, targetRk);
+                                if (result) {
+                                    addLog(`【海外進出】${c.name.replace(/\[.*?\]\s*/g,'')} が${result.country}に支店設立。`, 'news', '競合', 2);
+                                    // 再検索
+                                    Object.keys(globalNetworkData).forEach(rk => { globalNetworkData[rk].districts.forEach(dist => { dist.properties.forEach((prop, idx) => { if (prop.coffeeTenant === null && window.canOpenStoreInCountry(c, rk)) props.push({ rk, distName: dist.name, prop, idx }); }); }); });
+                                }
+                            }
+                        }
                         let target = props.length > 0 ? props[Math.floor(Math.random() * props.length)] : null;
                         if (target) {
                             let cost = target.prop.rent * 2;
@@ -5979,169 +6109,203 @@
                         // 現在の経営陣タイプを除外
                         let availMgmt = mgmtTypes.filter(m => m.key !== c.personality);
 
-                        let proposals = [
-                            // ① 増配
-                            {
-                                title: `💰 増配要求（配当性向+25%）`,
-                                desc: `内部留保が過剰です。配当性向を${(c.dividendRate||0)}% → ${Math.min(100,(c.dividendRate||0)+25)}% に引き上げるよう求めます。`,
-                                action: () => { c.dividendRate = Math.min(100, (c.dividendRate||0)+25); addLog(`【総会可決】${c.name.replace(/\[.*?\]\s*/,'')} が増配。配当性向 ${c.dividendRate}%。`, 'success', '経済'); }
-                            },
-                            // ② 自社株買い
-                            {
-                                title: `📈 自社株買い（発行株の10%）`,
-                                desc: `株価下支えのため、発行済み株式の10%を市場から買い戻します。1株価値・EPSが向上します。`,
-                                action: () => {
-                                    let buybackShares = Math.floor((c.shares||10000) * 0.10);
-                                    let cost = buybackShares * (c.stockPrice||100);
-                                    // 【段階1】資金不足なら銀行から緊急借入
-                                    if (c.cash < cost && c.sector !== 'bank') {
-                                        let availBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt && b.cash > 0);
-                                        if (availBanks.length > 0) {
-                                            let lender = availBanks.reduce((a, b) => (b.loanRate||0.005) < (a.loanRate||0.005) ? b : a);
-                                            let creditLimit = Math.max(1, (c.stores?.length||1)) * 50000000 * (c.isPublic ? 2 : 1);
-                                            let existing = (c.bankDebts?.[lender.id] || 0);
-                                            let canBorrow = Math.max(0, creditLimit - existing);
-                                            let borrowAmt = Math.min(canBorrow, cost - c.cash);
-                                            if (borrowAmt > 0) {
-                                                c.cash += borrowAmt;
-                                                lender.cash -= borrowAmt;
-                                                if (!c.bankDebts) c.bankDebts = {};
-                                                c.bankDebts[lender.id] = existing + borrowAmt;
-                                                addLog(`【自社株買い資金調達】${c.name.replace(/\[.*?\]\s*/,'')} が銀行から ¥${Math.floor(borrowAmt/10000).toLocaleString()}万 を緊急借入しました。`, 'normal', 'M&A');
-                                            }
-                                        }
-                                    }
-                                    // 【段階2】まだ足りなければ保有株を売却して現金化
-                                    if (c.cash < cost) {
-                                        let portfolio = companies.filter(t => t.id !== c.id && (t.shareholders[c.id]||0) > 0 && t.isPublic);
-                                        portfolio.sort((a, b) => (b.stockPrice*(b.shareholders[c.id]||0)) - (a.stockPrice*(a.shareholders[c.id]||0)));
-                                        for (let sell of portfolio) {
-                                            if (c.cash >= cost) break;
-                                            let sellShares = Math.floor((sell.shareholders[c.id]||0) * 0.5);
-                                            if (sellShares > 0) {
-                                                let proceeds = sell.stockPrice * sellShares;
-                                                c.cash += proceeds;
-                                                sell.shareholders[c.id] = (sell.shareholders[c.id]||0) - sellShares;
-                                                addLog(`【自社株買い資金調達】${c.name.replace(/\[.*?\]\s*/,'')} が ${sell.name.replace(/\[.*?\]\s*/,'')} 株を売却し ¥${Math.floor(proceeds/10000).toLocaleString()}万 を調達しました。`, 'normal', 'M&A');
-                                            }
-                                        }
-                                    }
-                                    // 【段階3】実行 or 失敗ログ
-                                    if (c.cash >= cost) {
-                                        c.cash -= cost;
-                                        c.shareholders[c.id] = (c.shareholders[c.id] || 0) + buybackShares;
-                                        c.stockPrice = Math.floor((c.stockPrice||100) * 1.08);
-                                        addLog(`【自社株買い】${c.name.replace(/\[.*?\]\s*/,'')} が ${buybackShares.toLocaleString()}株を金庫株として取得。株価↑ ¥${c.stockPrice.toLocaleString()}（自己保有${((c.shareholders[c.id]/c.shares)*100).toFixed(1)}%）`, 'success', 'M&A');
-                                    } else {
-                                        addLog(`【自社株買い不可】${c.name.replace(/\[.*?\]\s*/,'')} は資金・借入枠が不足しており、自社株買いを実行できませんでした。`, 'warning', 'M&A');
-                                    }
+                        let proposals = [];
+                        let _cn = c.name.replace(/\[.*?\]\s*/g,'');
+
+                        // ═══ 🔴 買収・投資系 ═══
+                        proposals.push({
+                            tag: '🔴 買収', title: `⚡ 積極的M&A方針`,
+                            desc: `cash50%までM&A投資を許可。TOB発動確率が3倍に。24週間有効。`,
+                            action: () => { c._aggressiveMA = week + 24; addLog(`【総会】${_cn} が積極M&A方針を採択。今後24週間、買収活動が加速。`, 'alert', 'M&A'); }
+                        });
+                        proposals.push({
+                            tag: '🔴 買収', title: `🌍 海外進出加速`,
+                            desc: `2カ国同時に支店設立。海外出店コスト-40%（24週間）。`,
+                            action: () => {
+                                c._overseasDiscount = week + 24;
+                                let foreignRks = Object.keys(globalNetworkData).filter(rk => (regionCountryMap[rk]||'JP') !== (c.country||'JP'));
+                                let opened = 0;
+                                for (let rk of foreignRks.sort(() => Math.random()-0.5)) {
+                                    if (opened >= 2) break;
+                                    let result = window.establishBranch(c, rk);
+                                    if (result) { opened++; addLog(`【海外進出】${_cn} が${result.country}に支店設立。`, 'news', 'M&A'); }
                                 }
-                            },
-                            // ③ 増資
-                            {
-                                title: `📊 増資（発行株の20%増）`,
-                                desc: `事業拡大のため新株を発行し資金調達。既存株主は希薄化しますが、企業の成長余力が高まります。${c.parent && c.parent !== 'player' ? '※ 親会社の承認が必要です。' : ''}`,
-                                action: () => {
-                                    let newShares = Math.floor((c.shares||10000) * 0.20);
-                                    let issuePrice = Math.floor((c.stockPrice||100) * 0.95);
-                                    // 親会社がいる場合は承認チェック
-                                    if (c.parent && c.parent !== 'player') {
-                                        let parentCo = companies.find(x => x.id === c.parent);
-                                        let parentApprove = parentCo ? (Math.random() < 0.6) : false;
-                                        if (!parentApprove) { addLog(`【増資否決】${c.name.replace(/\[.*?\]\s*/,'')} の増資は親会社 ${parentCo?.name.replace(/\[.*?\]\s*/,'')||'?'} の反対で否決。`, 'warning', 'M&A'); return; }
-                                    }
-                                    c.shares = (c.shares||10000) + newShares;
-                                    c.cash += newShares * issuePrice;
-                                    c.stockPrice = Math.max(10, Math.floor((c.stockPrice||100) * 0.85)); // 希薄化で株価下落
-                                    addLog(`【増資】${c.name.replace(/\[.*?\]\s*/,'')} が ${newShares.toLocaleString()}株を新規発行。資金 ¥${Math.floor(newShares*issuePrice/10000).toLocaleString()}万 調達。株価↓`, 'normal', 'M&A');
+                                addLog(`【総会】${_cn} が海外進出加速を決議。${opened}カ国に進出。`, 'success', 'M&A');
+                            }
+                        });
+                        proposals.push({
+                            tag: '🔴 買収', title: `🏦 戦略的大型借入`,
+                            desc: `銀行から時価総額の20%相当を調達。成長原資を確保。`,
+                            action: () => {
+                                let availBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt && b.cash > 0);
+                                if (availBanks.length > 0) {
+                                    let lender = availBanks.reduce((a, b) => (b.loanRate||0.005) < (a.loanRate||0.005) ? b : a);
+                                    let borrowAmt = Math.floor(c.marketCap * 0.2);
+                                    c.cash += borrowAmt; lender.cash -= borrowAmt;
+                                    if (!c.bankDebts) c.bankDebts = {};
+                                    c.bankDebts[lender.id] = (c.bankDebts[lender.id]||0) + borrowAmt;
+                                    addLog(`【大型借入】${_cn} が ¥${Math.floor(borrowAmt/1e4).toLocaleString()}万 を戦略借入。`, 'normal', '経済');
                                 }
-                            },
-                            // ④ 子会社売却
-                            {
-                                title: `🏢 子会社売却（傘下企業の売却入札）`,
-                                desc: `保有する子会社を市場に売却し、現金を得ます。売却先は最高入札AI企業が選ばれます。`,
-                                action: () => {
-                                    let subs = companies.filter(sub => sub.parent === c.id && !sub.isBankrupt);
-                                    if (subs.length === 0) { addLog(`【売却不可】${c.name.replace(/\[.*?\]\s*/,'')} には売却できる子会社がありません。`, 'warning', 'M&A'); return; }
-                                    let target = subs[Math.floor(Math.random() * subs.length)];
-                                    let basePrice = Math.floor(target.marketCap * (0.9 + Math.random() * 0.4));
-                                    let bidders = companies.filter(b => !b.isBankrupt && b.id !== c.id && b.id !== 'player' && b.cash >= basePrice);
-                                    let topBidder = bidders.length > 0 ? bidders.reduce((a,b) => b.cash > a.cash ? b : a) : null;
-                                    let topBid = topBidder ? Math.floor(basePrice * (1 + Math.random() * 0.15)) : basePrice;
-                                    let p = companies[0];
-                                    // プレイヤー参加モーダル
-                                    let modalsArea = document.getElementById('modals-area');
-                                    let existing = document.getElementById('auction-modal');
-                                    if (existing) existing.remove();
-                                    modalsArea.insertAdjacentHTML('beforeend', `
-                                    <div id="auction-modal" class="modal-overlay" style="z-index:10050;background:rgba(0,0,0,0.85);">
-                                      <div class="modal-content" style="max-width:440px;background:#0f172a;color:#fff;border:2px solid var(--gold);">
-                                        <div style="text-align:center;margin-bottom:16px;">
-                                          <div style="font-size:36px;">🏢</div>
-                                          <div style="font-weight:900;font-size:18px;color:var(--gold);">子会社売却入札</div>
-                                          <div style="font-size:13px;color:#94a3b8;margin-top:4px;">${c.name.replace(/\[.*?\]\s*/,'')} が ${target.name.replace(/\[.*?\]\s*/,'')} を売りに出しました</div>
-                                        </div>
-                                        <div style="background:#1e293b;border-radius:10px;padding:14px;margin-bottom:14px;">
-                                          <div class="flex-between" style="margin-bottom:6px;"><span style="color:#94a3b8;">時価総額</span><span style="font-weight:900;">¥${Math.floor(target.marketCap/10000).toLocaleString()}万</span></div>
-                                          <div class="flex-between" style="margin-bottom:6px;"><span style="color:#94a3b8;">AI最高入札</span><span style="font-weight:900;color:var(--danger);">¥${Math.floor(topBid/10000).toLocaleString()}万</span></div>
-                                          <div class="flex-between"><span style="color:#94a3b8;">あなたの手元資金</span><span style="font-weight:900;color:var(--success);">¥${Math.floor(p.cash/10000).toLocaleString()}万</span></div>
-                                        </div>
-                                        <div style="margin-bottom:14px;">
-                                          <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">入札額（万円）</div>
-                                          <input type="number" id="auction-bid-input" value="${Math.floor(topBid*1.05/10000)}" min="${Math.floor(basePrice/10000)}" style="width:100%;font-size:18px;font-weight:bold;text-align:center;border-radius:8px;border:2px solid var(--gold);background:#1e293b;color:#fff;padding:8px;">
-                                        </div>
-                                        <div style="display:flex;gap:10px;">
-                                          <button class="btn-outline btn-large" style="flex:1;border-color:#64748b;color:#94a3b8;" onclick="document.getElementById('auction-bid-input').value = '0'; submitAuctionBid('${c.id}','${target.id}','${topBidder?.id||''}',${topBid})">パス</button>
-                                          <button class="btn-primary btn-large" style="flex:2;background:var(--gold);" onclick="submitAuctionBid('${c.id}','${target.id}','${topBidder?.id||''}',${topBid})">💰 この価格で落札する</button>
-                                        </div>
-                                      </div>
-                                    </div>`);
-                                    document.getElementById('auction-modal').style.display = 'flex';
-                                    // AIは落札しなかった場合の処理を submitAuctionBid に委ねる
-                                    window._pendingAuctionSeller = c;
-                                    window._pendingAuctionTarget = target;
-                                    window._pendingAuctionTopBidder = topBidder;
-                                    window._pendingAuctionTopBid = topBid;
-                                }
-                            },
-                            // ⑤ 経営陣刷新（タイプ選択）
-                            ...availMgmt.slice(0,2).map(mt => ({
-                                title: `👔 経営陣刷新 → ${mt.label}`,
-                                desc: `現CEO を解任し、${mt.label} を就任させます。効果: ${mt.effect}`,
-                                action: () => { mt.apply(c); addLog(`【経営刷新】${c.name.replace(/\[.*?\]\s*/,'')} が ${mt.label} 体制に移行。`, 'warning', '経済'); }
-                            })),
-                            // ⑥ 設備投資・メニュー開発
-                            {
-                                title: `🛠️ 設備投資・メニュー開発`,
-                                desc: `将来の競争力強化のため、手元資金の10%を設備投資や製品開発に充てます。`,
-                                action: () => {
-                                    let cost = Math.floor(c.cash * 0.1);
-                                    c.cash -= cost;
-                                    c.stockPrice = Math.floor((c.stockPrice||100) * 1.05);
-                                    addLog(`【事業投資】${c.name.replace(/\[.*?\]\s*/,'')} が資金 ¥${Math.floor(cost/10000).toLocaleString()}万 を設備・開発に投資しました。`, 'success', '経済');
-                                }
-                            },
-                            // ⑦ 大型資金調達（銀行借入）
-                            {
-                                title: `🏦 戦略的借入（資金調達）`,
-                                desc: `成長余力を高めるため、銀行から時価総額の10%相当の大型融資を引き出します。`,
-                                action: () => {
+                            }
+                        });
+
+                        // ═══ 🔵 売却・撤退系 ═══
+                        proposals.push({
+                            tag: '🔵 売却', title: `💰 増配要求（+25%）`,
+                            desc: `配当性向を${(c.dividendRate||0)}% → ${Math.min(100,(c.dividendRate||0)+25)}%に引き上げ。`,
+                            action: () => { c.dividendRate = Math.min(100, (c.dividendRate||0)+25); addLog(`【総会】${_cn} が増配。配当性向${c.dividendRate}%。`, 'success', '経済'); }
+                        });
+                        proposals.push({
+                            tag: '🔵 売却', title: `📈 自社株買い（10%）`,
+                            desc: `発行済み株式の10%を買い戻し。EPS向上・株価支持。`,
+                            action: () => {
+                                let buybackShares = Math.floor((c.shares||10000) * 0.10);
+                                let cost = buybackShares * (c.stockPrice||100);
+                                if (c.cash < cost) {
                                     let availBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt && b.cash > 0);
                                     if (availBanks.length > 0) {
                                         let lender = availBanks.reduce((a, b) => (b.loanRate||0.005) < (a.loanRate||0.005) ? b : a);
-                                        let borrowAmt = Math.floor(c.marketCap * 0.1);
-                                        c.cash += borrowAmt; lender.cash -= borrowAmt;
-                                        if (!c.bankDebts) c.bankDebts = {};
-                                        c.bankDebts[lender.id] = (c.bankDebts[lender.id]||0) + borrowAmt;
-                                        addLog(`【大型借入】${c.name.replace(/\[.*?\]\s*/,'')} が銀行から ¥${Math.floor(borrowAmt/10000).toLocaleString()}万 を戦略的に借入れました。`, 'normal', '経済');
-                                    } else {
-                                        addLog(`【借入失敗】${c.name.replace(/\[.*?\]\s*/,'')} は貸出可能な銀行を見つけられませんでした。`, 'warning', '経済');
+                                        let borrowAmt = Math.min(Math.floor(c.marketCap * 0.5), cost - c.cash);
+                                        if (borrowAmt > 0) { c.cash += borrowAmt; lender.cash -= borrowAmt; if (!c.bankDebts) c.bankDebts = {}; c.bankDebts[lender.id] = (c.bankDebts[lender.id]||0) + borrowAmt; }
                                     }
                                 }
+                                if (c.cash >= cost) {
+                                    c.cash -= cost; c.shareholders[c.id] = (c.shareholders[c.id]||0) + buybackShares;
+                                    c.stockPrice = Math.floor((c.stockPrice||100) * 1.08);
+                                    addLog(`【自社株買い】${_cn} が${buybackShares.toLocaleString()}株を取得。株価↑¥${c.stockPrice.toLocaleString()}`, 'success', 'M&A');
+                                }
                             }
-                        ];
+                        });
+                        proposals.push({
+                            tag: '🔵 売却', title: `📊 増資（20%新株発行）`,
+                            desc: `新株発行で資金調達。株価は希薄化で下落。`,
+                            action: () => {
+                                let newShares = Math.floor((c.shares||10000) * 0.20);
+                                let issuePrice = Math.floor((c.stockPrice||100) * 0.95);
+                                c.shares = (c.shares||10000) + newShares; c.cash += newShares * issuePrice;
+                                c.stockPrice = Math.max(10, Math.floor((c.stockPrice||100) * 0.85));
+                                addLog(`【増資】${_cn} が${newShares.toLocaleString()}株発行。¥${Math.floor(newShares*issuePrice/1e4).toLocaleString()}万調達。`, 'normal', 'M&A');
+                            }
+                        });
+                        // 子会社売却
+                        let _subs = companies.filter(sub => sub.parent === c.id && !sub.isBankrupt);
+                        if (_subs.length > 0) {
+                            proposals.push({
+                                tag: '🔵 売却', title: `🏢 不採算子会社の売却`,
+                                desc: `子会社を市場に売却しcash化。入札形式で最高額のAI企業が買収。`,
+                                action: () => {
+                                    let target = _subs[Math.floor(Math.random() * _subs.length)];
+                                    let basePrice = Math.floor(target.marketCap * (0.9 + Math.random() * 0.4));
+                                    let bidders = companies.filter(b => !b.isBankrupt && b.id !== c.id && b.id !== 'player' && b.cash >= basePrice);
+                                    if (bidders.length > 0) {
+                                        let winner = bidders.reduce((a,b) => b.cash > a.cash ? b : a);
+                                        let bid = Math.floor(basePrice * (1 + Math.random() * 0.15));
+                                        winner.cash -= bid; c.cash += bid; target.parent = winner.id;
+                                        target.name = `[${winner.name.replace(/\[.*?\]\s*/g,'').slice(0,4)}傘下] ${target.name.replace(/\[.*?\]\s*/g,'')}`;
+                                        addLog(`【子会社売却】${_cn} が ${target.name.replace(/\[.*?\]\s*/g,'')} を ¥${Math.floor(bid/1e4).toLocaleString()}万 で売却。`, 'alert', 'M&A');
+                                    }
+                                }
+                            });
+                        }
+                        proposals.push({
+                            tag: '🔵 売却', title: `📉 事業縮小（赤字店舗閉鎖）`,
+                            desc: `4週以上赤字の店舗を自動閉鎖。コスト削減で体質改善。`,
+                            action: () => {
+                                let closed = 0;
+                                c.stores = c.stores.filter(s => {
+                                    if ((s._lossWeeks||0) >= 4) { closed++; return false; }
+                                    return true;
+                                });
+                                addLog(`【事業縮小】${_cn} が赤字店舗${closed}店を閉鎖。`, closed > 0 ? 'warning' : 'normal', '経済');
+                            }
+                        });
 
-                        // 🎯 M&A提案：生成時にターゲットを選定
+                        // ═══ 🟢 経営陣・組織系 ═══
+                        availMgmt.slice(0,2).forEach(mt => {
+                            proposals.push({
+                                tag: '🟢 経営', title: `👔 経営陣刷新 → ${mt.label}`,
+                                desc: `現CEOを解任し${mt.label}を就任。${mt.effect}。全店長★+1。`,
+                                action: () => {
+                                    mt.apply(c);
+                                    c.stores.forEach(s => { if (s.hasManager && s.managerData) s.managerData.bonus.traffic = Math.min(2.0, (s.managerData.bonus.traffic||1) + 0.05); });
+                                    addLog(`【経営刷新】${_cn} が${mt.label}体制に移行。全店長強化。`, 'warning', '経済');
+                                }
+                            });
+                        });
+                        proposals.push({
+                            tag: '🟢 経営', title: `🎓 後継者育成プログラム`,
+                            desc: `全店長のレベルを+1。将来の経営幹部候補を育成。`,
+                            action: () => {
+                                c.stores.forEach(s => { if (s.hasManager) s.managerLevel = Math.min(10, (s.managerLevel||1) + 1); });
+                                addLog(`【人材育成】${_cn} の全店長がレベルUP。`, 'success', '経済');
+                            }
+                        });
+                        proposals.push({
+                            tag: '🟢 経営', title: `🏢 組織再編（管理コスト削減）`,
+                            desc: `子会社管理コスト-30%（12週間）。事業効率化を推進。`,
+                            action: () => { c._reorgWeeks = week + 12; addLog(`【組織再編】${_cn} が管理コスト削減に着手。12週間有効。`, 'success', '経済'); }
+                        });
+
+                        // ═══ 🟡 経営方針・戦略系 ═══
+                        proposals.push({
+                            tag: '🟡 方針', title: `🔬 R&D投資強化`,
+                            desc: `cash30%を研究開発に投入。メニュー開発費-30%＋リニューアル成功率UP（24週間）。`,
+                            action: () => {
+                                let invest = Math.floor(c.cash * 0.30); c.cash -= invest;
+                                c._rdBoost = week + 24;
+                                c.stockPrice = Math.floor((c.stockPrice||100) * 1.08);
+                                addLog(`【R&D強化】${_cn} が¥${Math.floor(invest/1e4).toLocaleString()}万をR&Dに投入。24週間開発費割引。`, 'success', '経済');
+                            }
+                        });
+                        proposals.push({
+                            tag: '🟡 方針', title: `📣 大規模広告キャンペーン`,
+                            desc: `cash15%を広告に一括投入。全国の知名度+20。`,
+                            action: () => {
+                                let adCost = Math.floor(c.cash * 0.15); c.cash -= adCost;
+                                if (c.brandAwareness) { Object.keys(c.brandAwareness).forEach(k => { c.brandAwareness[k] = Math.min(100, (c.brandAwareness[k]||0) + 20); }); }
+                                addLog(`【広告】${_cn} が¥${Math.floor(adCost/1e4).toLocaleString()}万の大規模キャンペーンを展開！全国知名度+20。`, 'success', '経済');
+                            }
+                        });
+                        proposals.push({
+                            tag: '🟡 方針', title: `🌱 ESG経営宣言`,
+                            desc: `知名度減衰-50%＋融資枠+30%。ただしオペコスト+10%（24週間）。`,
+                            action: () => { c._esgWeeks = week + 24; addLog(`【ESG宣言】${_cn} がESG経営を宣言。ブランド価値向上＋コスト増。`, 'success', '経済'); }
+                        });
+                        proposals.push({
+                            tag: '🟡 方針', title: `💎 プレミアム路線転換`,
+                            desc: `全店舗の客単価+15%、ただし来客数-8%（12週間）。高付加価値戦略。`,
+                            action: () => {
+                                c._premiumWeeks = week + 12;
+                                c.stores.forEach(s => { s.price = Math.floor((s.price||1500) * 1.15); });
+                                addLog(`【路線転換】${_cn} がプレミアム路線に。全店値上げ+15%。`, 'success', '経済');
+                            }
+                        });
+                        proposals.push({
+                            tag: '🟡 方針', title: `🎁 従業員ボーナス支給`,
+                            desc: `cash5%を従業員に配布。全店舗の満足度+15（8週間）。`,
+                            action: () => {
+                                let bonus = Math.floor(c.cash * 0.05); c.cash -= bonus;
+                                c.stores.forEach(s => { s.satisfaction = Math.min(100, (s.satisfaction||60) + 15); });
+                                addLog(`【福利厚生】${_cn} が従業員ボーナスを支給。全店満足度+15。`, 'success', '経済');
+                            }
+                        });
+
+                        // 業種別の追加提案
+                        if (c.sector === 'bank') {
+                            proposals.push({ tag: '🔴 買収', title: `📈 貸付金利の引き上げ`, desc: `収益性向上のため金利を+0.2%引き上げ。`,
+                                action: () => { c.loanRate = (c.loanRate||0.005) + 0.002; addLog(`【利上げ】銀行${_cn}が金利引き上げ。`, 'warning', '物価'); }
+                            });
+                        }
+                        if (c.sector === 'coffee') {
+                            proposals.push({ tag: '🔴 買収', title: `🏪 新規エリアへの出店強要`, desc: `シェア拡大のため新規エリアに出店。`,
+                                action: () => {
+                                    let props = []; Object.keys(globalNetworkData).forEach(rk => { globalNetworkData[rk].districts.forEach(dist => { dist.properties.forEach((p, idx) => { if (p.coffeeTenant === null && window.canOpenStoreInCountry(c, rk)) props.push({rk, distName: dist.name, p, idx}); }); }); });
+                                    let t = props[Math.floor(Math.random() * props.length)];
+                                    if (t) { let cost = t.p.rent * 5; c.cash -= cost; t.p.coffeeTenant = 2; c.stores.push(new Store(`[株主主導] ${t.p.type}`, t.p.rent, t.p.traffic, t.p.owner, t.p.id, t.rk, t.distName, t.idx)); addLog(`【総会】${_cn}が新規出店を強行。`, 'normal', '経済'); }
+                                }
+                            });
+                        }
+                        // M&A提案
                         let maTargets = companies.filter(t => t.id !== c.id && !t.isBankrupt && !t.parent && t.isPublic && t.marketCap < c.marketCap * 1.5 && t.id !== 'player');
                         if (maTargets.length > 0) {
                             let tgt = maTargets.sort((a,b) => (b.qNet||0)-(a.qNet||0))[0];
@@ -6149,80 +6313,29 @@
                             let price = Math.floor(tgt.stockPrice * (1 + prem/100));
                             let sharesNeeded = Math.floor(window.getFloatShares ? window.getFloatShares(tgt) * 0.51 : tgt.shares * 0.51);
                             proposals.push({
-                                title: `🎯 M&A提案：${tgt.name.replace(/\[.*?\]\s*/,'')} へのTOB`,
-                                desc: `成長性が見込める ${tgt.name.replace(/\[.*?\]\s*/,'')} を買収するため、プレミアム+${prem}%にてTOBを仕掛けます。不足分は銀行借入も行います。`,
+                                tag: '🔴 買収', title: `🎯 M&A：${tgt.name.replace(/\[.*?\]\s*/g,'')} へのTOB`,
+                                desc: `プレミアム+${prem}%でTOB。不足分は銀行借入。`,
                                 action: () => {
                                     let cost = sharesNeeded * price;
-                                    // 資金不足なら事前に借入
-                                    if (c.cash < cost && c.sector !== 'bank') {
+                                    if (c.cash < cost) {
                                         let availBanks = companies.filter(b => b.sector === 'bank' && !b.isBankrupt && b.cash > 0);
                                         if (availBanks.length > 0) {
                                             let lender = availBanks.reduce((a, b) => (b.loanRate||0.005) < (a.loanRate||0.005) ? b : a);
                                             let borrowAmt = Math.min(Math.floor(c.marketCap * 0.8), cost - c.cash);
-                                            if (borrowAmt > 0) {
-                                                c.cash += borrowAmt; lender.cash -= borrowAmt;
-                                                if (!c.bankDebts) c.bankDebts = {};
-                                                c.bankDebts[lender.id] = (c.bankDebts[lender.id]||0) + borrowAmt;
-                                                addLog(`【資金調達】${c.name.replace(/\[.*?\]\s*/,'')} が資金調達のため ¥${Math.floor(borrowAmt/10000).toLocaleString()}万 を銀行から借入しました。`, 'normal', 'M&A');
-                                            }
+                                            if (borrowAmt > 0) { c.cash += borrowAmt; lender.cash -= borrowAmt; if (!c.bankDebts) c.bankDebts = {}; c.bankDebts[lender.id] = (c.bankDebts[lender.id]||0) + borrowAmt; }
                                         }
                                     }
                                     if (!tgt.activeTOB_v2) {
                                         tgt.activeTOB_v2 = { bidder: c.id, price, targetShares: sharesNeeded, startWeek: week, deadline: week + 4, premiumPct: prem };
-                                        addLog(`【TOB発議】株主総会可決により ${c.name.replace(/\[.*?\]\s*/,'')} が ${tgt.name.replace(/\[.*?\]\s*/,'')} に TOB開始！（プレミアム +${prem}%）`, 'alert', 'M&A');
-                                    } else {
-                                        addLog(`【TOB不可】${tgt.name.replace(/\[.*?\]\s*/,'')} はすでに他のTOBにかかっているため、提案は流会しました。`, 'warning', 'M&A');
+                                        addLog(`【TOB発議】株主総会可決で${_cn}が${tgt.name.replace(/\[.*?\]\s*/g,'')}にTOB開始！`, 'alert', 'M&A');
                                     }
                                 }
                             });
                         }
-
-                        // 💸 金庫株放出
-                        if ((c.shareholders[c.id] || 0) > c.shares * 0.01) {
-                            proposals.push({
-                                title: `💸 金庫株の市場放出`,
-                                desc: `保有している自社株（金庫株）をすべて市場に放出し、現金に換えます。希薄化で株価は低下します。`,
-                                action: () => {
-                                    let treasurySh = c.shareholders[c.id];
-                                    let proceeds = treasurySh * c.stockPrice;
-                                    c.cash += proceeds;
-                                    c.shareholders[c.id] = 0;
-                                    c.stockPrice = Math.max(10, Math.floor((c.stockPrice||100) * 0.95));
-                                    addLog(`【金庫株放出】${c.name.replace(/\[.*?\]\s*/,'')} が金庫株 ${treasurySh.toLocaleString()}株を売却し、¥${Math.floor(proceeds/10000).toLocaleString()}万 を調達。`, 'normal', 'M&A');
-                                }
-                            });
-                        }
-
-                        if (c.sector === 'bank') {
-                            proposals.push({
-                                title: `貸付金利の引き上げ要求`,
-                                desc: `収益性向上のため、貸付金利を上げ、より貪欲な経営を目指すべきです。`,
-                                action: () => { c.loanRate = (c.loanRate || 0.005) + 0.002; addLog(`【利上げ】銀行 ${c.name.replace(/\[.*?\]\s*/, '')} が金利を引き上げ。`, 'warning', '物価'); }
-                            });
-                        } else if (c.sector === 're') {
-                            proposals.push({
-                                title: `新規物件の強気買収勧告`,
-                                desc: `不動産ポートフォリオが貧弱です。手元資金を使い、即座に市場から物件を買い取るべきです。`,
-                                action: () => {
-                                    let props = []; Object.keys(globalNetworkData).forEach(rk => { globalNetworkData[rk].districts.forEach(d => { d.properties.forEach((p, idx) => { if (p.owner && p.owner !== c.id) props.push({ rk, d, p, idx }); }); }); });
-                                    if (props.length > 0) { let t = props[Math.floor(Math.random() * props.length)]; c.cash -= (t.p.currentValue || (t.p.rent * 2600)); t.p.owner = c.id; addLog(`【総会】不動産 ${c.name.replace(/\[.*?\]\s*/, '')} が物件を強制取得。`, 'normal', '経済'); }
-                                }
-                            });
-                        } else if (c.sector === 'sogo') {
-                            proposals.push({
-                                title: `他社株の積極買い付け要求`,
-                                desc: `時価総額向上のため、積極的に他社の株式を取得し、支配力を高めるべきです。`,
-                                action: () => { c.cash -= Math.floor(c.cash * 0.4); addLog(`【総会】証券 ${c.name.replace(/\[.*?\]\s*/, '')} が投資予算を拡大しました。`, 'normal', '経済'); }
-                            });
-                        } else if (c.sector === 'coffee') {
-                            proposals.push({
-                                title: `新規エリアへの出店強要`,
-                                desc: `シェア拡大が急務です。資金を惜しまず、新規エリアへ出店すべきです。`,
-                                action: () => {
-                                    let props = []; Object.keys(globalNetworkData).forEach(rk => { globalNetworkData[rk].districts.forEach(dist => { dist.properties.forEach((p, idx) => { if (p.coffeeTenant === null) props.push({ rk, distName: dist.name, p, idx }); }); }); });
-                                    let t = props[Math.floor(Math.random() * props.length)];
-                                    if (t) { let cost = t.p.rent * 5; c.cash -= cost; t.p.coffeeTenant = 2; if (typeof window.payStoreBuildRoyalty === 'function') window.payStoreBuildRoyalty(c, cost); c.stores.push(new Store(`[株主主導] ${t.p.type}`, t.p.rent, t.p.traffic, t.p.owner, t.p.id, t.rk, t.distName, t.idx)); addLog(`【総会】${c.name.replace(/\[.*?\]\s*/, '')} が新規出店を強行。`, 'normal', '経済'); }
-                                }
+                        // 金庫株放出
+                        if ((c.shareholders[c.id]||0) > c.shares * 0.01) {
+                            proposals.push({ tag: '🔵 売却', title: `💸 金庫株の市場放出`, desc: `金庫株を売却してcash化。株価は若干下落。`,
+                                action: () => { let t = c.shareholders[c.id]; let p = t * c.stockPrice; c.cash += p; c.shareholders[c.id] = 0; c.stockPrice = Math.max(10, Math.floor(c.stockPrice * 0.95)); addLog(`【金庫株放出】${_cn}が${t.toLocaleString()}株売却。¥${Math.floor(p/1e4).toLocaleString()}万調達。`, 'normal', 'M&A'); }
                             });
                         }
 
@@ -8043,6 +8156,25 @@ ${ds.desc}`)) {
             if (!grid) return;
             const region = globalNetworkData[regionKey];
             grid.innerHTML = '';
+
+            // 🏢 支店ステータス表示
+            let _rCountry = regionCountryMap[regionKey] || 'JP';
+            let _homeCountry = companies[0].country || 'JP';
+            if (_rCountry !== _homeCountry) {
+                let _brCount = (companies[0]._branches && companies[0]._branches[_rCountry]) ? companies[0]._branches[_rCountry].length : 0;
+                let _storesInC = companies[0].stores.filter(s => (regionCountryMap[s.regionKey]||'JP') === _rCountry).length;
+                let _cName = (window._bkCNames || {})[_rCountry] || _rCountry;
+                let branchCard = document.createElement('div');
+                branchCard.style.cssText = 'grid-column:1/-1;padding:12px 16px;border-radius:10px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;' +
+                    (_brCount > 0 ? 'background:#d1fae5;border:1px solid #10b981;' : 'background:#fef3c7;border:1px solid #fcd34d;');
+                branchCard.innerHTML = _brCount > 0
+                    ? `<div><span style="font-weight:900;font-size:13px;">🏢 ${_cName} 支店: ${_brCount}拠点</span><span style="font-size:11px;color:#065f46;margin-left:8px;">出店${_storesInC}/${_brCount*10}枠</span></div>
+                       <button onclick="playerEstablishBranch('${regionKey}')" class="btn-primary" style="padding:6px 14px;font-size:11px;font-weight:700;">+ 追加支店</button>`
+                    : `<div><span style="font-weight:900;font-size:13px;">⚠️ ${_cName} に支店がありません</span><span style="font-size:11px;color:#92400e;margin-left:8px;">出店するには支店設立が必要</span></div>
+                       <button onclick="playerEstablishBranch('${regionKey}')" class="btn-primary" style="padding:6px 14px;font-size:11px;font-weight:700;background:var(--gold);">🏢 支店を設立</button>`;
+                grid.appendChild(branchCard);
+            }
+
             region.districts.forEach(dist => {
                 const card = document.createElement('div');
                 card.className = 'card';
@@ -8311,6 +8443,12 @@ ${ds.desc}`)) {
         window.executeExpansion = function (regionKey, distName, propIndex) {
             const p = companies[0], dist = globalNetworkData[regionKey].districts.find(d => d.name === distName), prop = dist.properties[propIndex];
             if (prop.coffeeTenant !== null) return;
+            // 🏢 支店チェック: 海外なら支店が必要
+            if (!window.canOpenStoreInCountry(p, regionKey)) {
+                let country = regionCountryMap[regionKey] || 'JP';
+                let cName = (window._bkCNames || {})[country] || country;
+                return alert(`【海外出店規制】${cName}に支店がありません。\n不動産マップから「支店を設立」してください。\n支店1つで最大10店舗まで出店可能です。`);
+            }
             const _isOverseas = !['TOKYO','OSAKA'].includes(regionKey);
             const _regDisc = (typeof window.getLobbyEffect==='function' && window.getLobbyEffect('reg')) ? 0.70 : 1.0;
             const _overDisc = (_isOverseas && typeof window.getLobbyEffect==='function' && window.getLobbyEffect('over')) ? 0.75 : 1.0;
@@ -8333,6 +8471,41 @@ ${ds.desc}`)) {
             updateDashboard(); renderPropertyScanner(regionKey, dist); displayDistricts(regionKey);
             requestAnimationFrame(() => { window.scrollTo(0, _pageY); });
             let _sc = document.getElementById('scanner-content'); if(_sc) { let _st = _sc.scrollTop; requestAnimationFrame(() => { if(_sc) _sc.scrollTop = _st; }); }
+        };
+
+        // 🏢 プレイヤー支店設立
+        window.playerEstablishBranch = function (regionKey) {
+            let p = companies[0];
+            let country = regionCountryMap[regionKey] || 'JP';
+            let cName = (window._bkCNames || {})[country] || country;
+            if ((p.country || 'JP') === country) return alert('本国には支店は不要です。自由に出店できます。');
+            // その国で空きNPCスロットを探す
+            let targetRegions = countryRegions[country] || [regionKey];
+            let candidates = [];
+            targetRegions.forEach(rk => {
+                if (!globalNetworkData[rk]) return;
+                globalNetworkData[rk].districts.forEach(d => {
+                    d.properties.forEach((pr, idx) => {
+                        if (pr.occupiedNPCSlots < pr.npcSlots) candidates.push({rk, distName: d.name, prop: pr, idx, rent: pr.rent});
+                    });
+                });
+            });
+            if (candidates.length === 0) return alert(`${cName}に空きテナントがありません。ビルを建てるか、空きを待ってください。`);
+            candidates.sort((a, b) => a.rent - b.rent);
+            let best = candidates[0];
+            let cost = best.rent * 8;
+            let storesInCountry = (p.stores || []).filter(s => (regionCountryMap[s.regionKey] || 'JP') === country).length;
+            let branchCount = (p._branches && p._branches[country]) ? p._branches[country].length : 0;
+            if (!confirm(`${cName} に支店を設立しますか？\n\n場所: ${best.distName} ${best.prop.type}\n設立費: ¥${Math.floor(cost/10000).toLocaleString()}万（家賃8週分）\n週次家賃: ¥${Math.floor(best.rent/10000).toLocaleString()}万\n既存支店: ${branchCount}個（店舗${storesInCountry}/${branchCount*10}枠）\n\n支店1つで最大10店舗まで出店可能。`)) return;
+            if (p.cash < cost) return alert('資金不足です。');
+            let result = window.establishBranch(p, regionKey);
+            if (result) {
+                addLog(`【支店設立】${cName} に支店を開設！（${best.distName}）今後この国に出店可能に。`, 'success', '自社', 4);
+                updateDashboard();
+                if (typeof displayDistricts === 'function') displayDistricts(regionKey);
+            } else {
+                alert('支店設立に失敗しました。');
+            }
         };
 
         window.buyBuilding = function (regionKey, distName, propIndex, price) {
@@ -8800,7 +8973,7 @@ ${ds.desc}`)) {
                             <button class="btn-outline" style="flex:1; border-color:var(--danger); color:var(--danger);" onclick="executeBankAction('repay')">返済する</button>
                         </div>
                     </div>
-                    <button class="btn-primary" style="width:100%; margin-top:10px; background:var(--gold); color:#000; font-weight:900;" onclick="executeBankAction('term_deposit')">🔒 定期預金（1年ロック・週+0.3%）</button>
+                    <button class="btn-primary" style="width:100%; margin-top:10px; background:var(--gold); color:#000; font-weight:900;" onclick="executeBankAction('term_deposit')">🔒 定期預金（3年ロック・維持費なし・年利で利息）</button>
                     <div id="disp-term-deposits" style="margin-top:10px; font-size:12px;"></div>
                 </div>
                 </div>
@@ -9302,13 +9475,14 @@ ${ds.desc}`)) {
                     }
                 }
                 let tdRate = bankCo.termDepositRate || (bankCo.depositRate || 0.001) * 3;
-                let expectedReturn = Math.floor(amount * tdRate * 48);
-                if (!confirm(`定期預金を申し込みます。\n金額: ¥${amount.toLocaleString()}\n期間: 48週（1年）\n金利: 週${(tdRate * 100).toFixed(3)}%\n満期受取額: ¥${(amount + expectedReturn).toLocaleString()}\n\n※ 満期前は引き出せません。`)) return;
+                let lockWeeks = 156; // 3年
+                let expectedReturn = Math.floor(amount * tdRate * lockWeeks);
+                if (!confirm(`定期預金を申し込みます。\n金額: ¥${amount.toLocaleString()}\n期間: 156週（3年）\n金利: 週${(tdRate * 100).toFixed(3)}%\n満期受取予想: ¥${(amount + expectedReturn).toLocaleString()}\n\n✅ 口座維持費なし（普通預金は毎週0.01%かかる）\n⚠️ 3年間引き出し不可`)) return;
                 p.cash -= amount;
                 bankCo.cash += amount;
                 if (!p.termDeposits) p.termDeposits = [];
-                p.termDeposits.push({ bankId, amount, startWeek: week, rate: tdRate });
-                addLog(`【定期預金】¥${amount.toLocaleString()} を ${bankCo.name.replace(/\[.*?\]\s*/, '')} に1年間預けました。（週利${(tdRate * 100).toFixed(3)}%）`, 'success', '_財務');
+                p.termDeposits.push({ bankId, amount, startWeek: week, rate: tdRate, lockWeeks: 156 });
+                addLog(`【定期預金】¥${Math.floor(amount/1e4).toLocaleString()}万 を ${bankCo.name.replace(/\[.*?\]\s*/, '')} に3年間預けました。維持費なし。`, 'success', '財務');
             }
             updateBankUI(); updateDashboard();
         };
@@ -12947,14 +13121,19 @@ ${ds.desc}`)) {
             // ── 筆頭株主モード：議案選択UI ──────────────────────────
             if (isTopShareholder) {
                 let proposals = eventData.proposals;
-                let proposalBtns = proposals.map((p, i) =>
-                    `<button id="proposal-btn-${i}" class="btn-outline btn-large" style="width:100%; text-align:left; padding:16px 20px; margin-bottom:10px; border-radius:10px; border:2px solid var(--border); background:#fff; cursor:pointer;"
+                let proposalBtns = proposals.map((p, i) => {
+                    let tagColors = {'🔴 買収':'#fee2e2;color:#991b1b','🔵 売却':'#dbeafe;color:#1e40af','🟢 経営':'#d1fae5;color:#065f46','🟡 方針':'#fef3c7;color:#92400e'};
+                    let tagStyle = tagColors[p.tag] || '#f1f5f9;color:#64748b';
+                    return `<button id="proposal-btn-${i}" class="btn-outline btn-large" style="width:100%; text-align:left; padding:14px 16px; margin-bottom:8px; border-radius:10px; border:2px solid var(--border); background:#fff; cursor:pointer;"
                         onmouseover="this.style.borderColor='var(--primary)'; this.style.background='#eff6ff';"
                         onmouseout="this.style.borderColor='var(--border)'; this.style.background='#fff';">
-                        <div style="font-weight:900; font-size:15px; color:var(--text-main); margin-bottom:4px;">📋 ${p.title}</div>
-                        <div style="font-size:12px; color:var(--text-mut); line-height:1.5;">${p.desc}</div>
-                    </button>`
-                ).join('');
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+                            ${p.tag ? `<span style="font-size:9px;font-weight:900;padding:2px 8px;border-radius:10px;background:${tagStyle};white-space:nowrap;">${p.tag}</span>` : ''}
+                            <span style="font-weight:900; font-size:14px; color:var(--text-main);">${p.title}</span>
+                        </div>
+                        <div style="font-size:11px; color:var(--text-mut); line-height:1.5;">${p.desc}</div>
+                    </button>`;
+                }).join('');
 
                 let modalHtml = `
                     <div id="voting-modal" class="modal-overlay" style="display:flex; z-index:2000; background:rgba(0,0,0,0.85); backdrop-filter:blur(15px);">
