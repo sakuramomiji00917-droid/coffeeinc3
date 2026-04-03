@@ -4462,6 +4462,22 @@
                     let drift = _econDrift * (0.5 + Math.random());
                     c.stockPrice = Math.max(10, Math.floor(c.stockPrice * (1 + drift)));
                 }
+
+                // 🛑 ストップ高・ストップ安の判定 (週次変動 ±20%制限)
+                c.isLimitUp = false;
+                c.isLimitDown = false;
+                if (c.prevStockPrice && c.prevStockPrice > 0) {
+                    let maxPrice = Math.floor(c.prevStockPrice * 1.20);
+                    let minPrice = Math.max(10, Math.floor(c.prevStockPrice * 0.80));
+                    if (c.stockPrice > maxPrice) { c.stockPrice = maxPrice; c.isLimitUp = true; }
+                    if (c.stockPrice < minPrice) { c.stockPrice = minPrice; c.isLimitDown = true; }
+                }
+
+                // 📊 今週の取引量（流動性）の制限枠を設定：発行総数の2% + 浮動株の10%
+                let floatS = (c.shareholders && c.shareholders['market']) ? c.shareholders['market'] : 0;
+                c.weeklyVolume = Math.max(1, Math.floor(c.shares * 0.02) + Math.floor(floatS * 0.10));
+                c.usedVolume = 0;
+
                 // AI企業: 株価が1万円超えたら新株発行（株価を半分に・株数2倍）で1万円以下に維持
                 if (c.id !== 'player' && c.stockPrice > 10000 && c.isPublic && !c.isBankrupt) {
                     let splitRatio = Math.ceil(c.stockPrice / 8000); // 何倍分割か（最低2）
@@ -4477,6 +4493,18 @@
                 }
 
                 if (!stockHistory.datasets[c.id]) stockHistory.datasets[c.id] = []; stockHistory.datasets[c.id].push(c.stockPrice); if (stockHistory.datasets[c.id].length > 20) stockHistory.datasets[c.id].shift();
+
+                // ── M&A・証券 2.0: OHLCV データの保存 ──
+                if (!c._ohlcv) c._ohlcv = [];
+                let _oPrice = c.prevStockPrice || c.stockPrice;
+                let _cPrice = c.stockPrice;
+                let _vVol = Math.floor((Math.floor(c.shares * 0.02) + Math.floor((c.shareholders['market']||0) * 0.10)) * (Math.random() * 0.5 + 0.5));
+                let _hiBase = Math.max(_oPrice, _cPrice);
+                let _loBase = Math.min(_oPrice, _cPrice);
+                let _hPrice = _hiBase + Math.floor(Math.random() * (_hiBase * 0.04));
+                let _lPrice = _loBase - Math.floor(Math.random() * (_loBase * 0.04));
+                c._ohlcv.push({ o: _oPrice, h: _hPrice, l: _lPrice, c: _cPrice, v: _vVol });
+                if (c._ohlcv.length > 20) c._ohlcv.shift();
 
                 // 💀 破産判定（4週猶予制）
                 let totalDeposits_c = Object.values(c.deposits || {}).reduce((s, v) => s + v, 0);
@@ -6978,6 +7006,71 @@
                     }
                 });
             }
+
+            // ── 指値注文の約定処理 (Limit Orders) ──
+            if (!companies[0].pendingOrders) companies[0].pendingOrders = [];
+            let _p = companies[0];
+            let _remainingOrders = [];
+            for (let order of _p.pendingOrders) {
+                let tgtCo = companies.find(cx => cx.id === order.coId);
+                if (!tgtCo || tgtCo.isBankrupt) {
+                    addLog(`【注文失効】${(tgtCo?tgtCo.name:'見つからない企業')} が破産等のため、指値注文 (${order.type==='buy'?'買':'売'} ${order.amount}株) は失効しました。`, 'warning', '市場');
+                    continue;
+                }
+                
+                let ohlcvList = tgtCo._ohlcv || [];
+                let latestOHLCV = ohlcvList[ohlcvList.length - 1];
+                let executed = false;
+                
+                let lowP = latestOHLCV ? latestOHLCV.l : tgtCo.stockPrice;
+                let highP = latestOHLCV ? latestOHLCV.h : tgtCo.stockPrice;
+                
+                if (order.type === 'buy') {
+                    if (lowP <= order.price) {
+                        let cost = order.price * order.amount;
+                        if (_p.cash >= cost) {
+                            if (order.amount > window.getMarketShares(tgtCo)) {
+                                addLog(`【約定失敗】指値買い: ${tgtCo.name.replace(/\[.*?\]\s*/,'')} の市場保有株が足りません。`, 'warning', '市場');
+                            } else {
+                                _p.cash -= cost;
+                                let currentOwned = tgtCo.shareholders['player'] || 0;
+                                tgtCo.shareholders['player'] = currentOwned + order.amount;
+                                if (tgtCo.shareholders['market'] !== undefined) tgtCo.shareholders['market'] = Math.max(0, (tgtCo.shareholders['market'] || 0) - order.amount);
+                                tgtCo.playerTotalCost += cost;
+                                addLog(`【約定】指値買い: ${tgtCo.name.replace(/\[.*?\]\s*/,'')} ${order.amount.toLocaleString()}株 @ ¥${order.price.toLocaleString()} (-¥${Math.floor(cost/10000).toLocaleString()}万)`, 'success', '自社', 4);
+                                executed = true;
+                            }
+                        } else {
+                            addLog(`【約定失敗】指値買い: 資金不足（${tgtCo.name.replace(/\[.*?\]\s*/,'')} ${order.amount.toLocaleString()}株 @ ¥${order.price.toLocaleString()}）`, 'warning', '自社');
+                        }
+                    }
+                } else if (order.type === 'sell') {
+                    if (highP >= order.price) {
+                        let owned = tgtCo.shareholders['player'] || 0;
+                        if (owned >= order.amount) {
+                            let revenue = order.price * order.amount;
+                            let avgCost = tgtCo.playerTotalCost / owned;
+                            let profitPerShare = order.price - avgCost;
+                            let totalProfit = profitPerShare * order.amount;
+                            
+                            _p.cash += revenue;
+                            tgtCo.playerTotalCost -= avgCost * order.amount;
+                            tgtCo.shareholders['player'] -= order.amount;
+                            if (tgtCo.isPublic) tgtCo.shareholders['market'] = (tgtCo.shareholders['market'] || 0) + order.amount;
+                            if (tgtCo.shareholders['player'] === 0) tgtCo.playerTotalCost = 0;
+                            
+                            window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + totalProfit;
+                            let profSign = totalProfit >= 0 ? '+' : '';
+                            addLog(`【約定】指値売り: ${tgtCo.name.replace(/\[.*?\]\s*/,'')} ${order.amount.toLocaleString()}株 @ ¥${order.price.toLocaleString()} (利益: ${profSign}¥${Math.floor(totalProfit/10000).toLocaleString()}万)`, totalProfit >= 0 ? 'success' : 'warning', '自社', 4);
+                            executed = true;
+                        } else {
+                            addLog(`【約定失敗】指値売り: 保有株不足（${tgtCo.name.replace(/\[.*?\]\s*/,'')} ${order.amount.toLocaleString()}株）`, 'warning', '自社');
+                        }
+                    }
+                }
+                if (!executed) _remainingOrders.push(order);
+            }
+            _p.pendingOrders = _remainingOrders;
 
             // ── AIの高度なホールディングス戦略（子会社投資・吸収・売却） ──
             if (window._difficulty && (window._difficulty.name === 'Hard' || window._difficulty.name === 'Real')) {
@@ -9738,11 +9831,22 @@ ${ds.desc}`)) {
                             return `<div style="margin-bottom:8px;font-size:12px;">有効な効果: ${effectsHtml}</div>${pendingHtml}${pkgHtml}`;
                         })()}
                     </div>
-                    ${!p.isPublic ? '' : `<div class="card" style="grid-column: 1 / -1;"><div class="card-header">📈 公募増資 (自社株発行)</div>
+                    </div>
+                    ${!p.isPublic ? '' : (() => {
+                        let floatRatio = (p.shareholders['market'] || 0) / p.shares;
+                        let isFloatLow = floatRatio < 0.3;
+                        let reason = !isFloatLow ? `（浮動株が ${Math.round(floatRatio*100)}% あるため不要）` : `（浮動株が30%未満のため実行可能）`;
+                        let canDilute = isFloatLow && (!p.lastDilutionWeek || (week - p.lastDilutionWeek) >= 48);
+                        let disabledReason = !isFloatLow ? 'disabled title="浮動株が30%未満の場合のみ実行可能"' : (p.lastDilutionWeek && (week - p.lastDilutionWeek) < 48 ? 'disabled title="前回実施から48週経過が必要"' : '');
+                        
+                        return `<div class="card" style="grid-column: 1 / -1;"><div class="card-header">📈 公募増資 (自社株発行)</div>
+                        <div style="font-size:12px;color:var(--text-mut);margin-bottom:10px;line-height:1.7;">
+                            市場に新株を発行して資金調達し、流動性を回復します。${reason}
+                        </div>
                         <div style="display:flex; gap:20px; align-items:center; margin-bottom:12px;">
                             <div style="flex:1;">
-                                <label style="font-weight:bold; font-size:14px;">発行比率: <span id="dilution-range-val" class="text-success">10</span>%</label>
-                                <input type="range" id="dilution-range" min="5" max="30" step="5" value="10" oninput="
+                                <label style="font-weight:bold; font-size:14px;">発行比率: <span id="dilution-range-val" class="text-success">20</span>%</label>
+                                <input type="range" id="dilution-range" min="5" max="30" step="5" value="20" ${!canDilute ? 'disabled' : ''} oninput="
                                     document.getElementById('dilution-range-val').innerText=this.value;
                                     let ratio=parseInt(this.value)/100;
                                     let newShares=Math.floor(${p.shares}*ratio);
@@ -9753,20 +9857,21 @@ ${ds.desc}`)) {
                                         +'📉 株価: <b>¥${p.stockPrice.toLocaleString()}</b> → <b class=text-danger>¥'+newPrice.toLocaleString()+'</b>';
                                 ">
                             </div>
-                            <button class="btn-primary" style="padding:15px 30px;" onclick="executePlayerDilution()" ${p.lastDilutionWeek && (week - p.lastDilutionWeek) < 48 ? 'disabled' : ''}>新株を発行して資金調達</button>
+                            <button class="btn-primary" style="padding:15px 30px;" onclick="executePlayerDilution()" ${disabledReason}>新株発行で資金調達</button>
                         </div>
                         <div id="dilution-preview" style="font-size:13px; font-weight:bold; background:#f9fafb; border:1px solid var(--border); border-radius:8px; padding:10px 14px; color:var(--text-main);">
-                            💰 調達額: <b class="text-success">¥${Math.floor(p.shares * 0.1 * p.stockPrice * 0.9).toLocaleString()}</b>　　📉 株価: <b>¥${p.stockPrice.toLocaleString()}</b> → <b class="text-danger">¥${Math.floor(p.stockPrice * 0.94).toLocaleString()}</b>
+                            💰 調達額: <b class="text-success">¥${Math.floor(p.shares * 0.2 * p.stockPrice * 0.9).toLocaleString()}</b>　　📉 株価: <b>¥${p.stockPrice.toLocaleString()}</b> → <b class="text-danger">¥${Math.floor(p.stockPrice * 0.88).toLocaleString()}</b>
                         </div>
-                    </div>`}
-                    ${p.isPublic && p.stockPrice >= 5000 ? `<div class="card" style="grid-column: 1 / -1;"><div class="card-header">✂️ 株式分割</div>
+                    </div>`;
+                    })()}
+                    ${p.isPublic && p.stockPrice >= 50000 ? `<div class="card" style="grid-column: 1 / -1;"><div class="card-header">✂️ 株式分割</div>
                         <div style="font-size:12px;color:var(--text-mut);margin-bottom:10px;line-height:1.7;">
-                            株価を下げて流動性を高めます。時価総額は変わりません。株価¥5,000以上で実行可能。
+                            株価を下げて買い手（流動性）を集まりやすくします。時価総額は変わりません。株価¥50,000以上で実行可能。
                         </div>
                         <div style="font-size:13px;font-weight:900;margin-bottom:10px;">現在の株価: ¥${p.stockPrice.toLocaleString()} / 発行済: ${p.shares.toLocaleString()}株</div>
                         <div style="display:flex;gap:8px;">
-                            ${[2, 3, 5, 10].filter(r => p.stockPrice / r >= 500).map(r => `<button class="btn-outline" style="flex:1;padding:10px;font-weight:900;" onclick="executeStockSplit(${r})">
-                                ${r}分割<br><span style="font-size:10px;color:var(--text-mut);">→¥${Math.floor(p.stockPrice/r).toLocaleString()}</span>
+                            ${[10].filter(r => p.stockPrice / r >= 5000).map(r => `<button class="btn-outline" style="flex:1;padding:10px;font-weight:900;" onclick="executeStockSplit(${r})">
+                                ${r}分割を実行<br><span style="font-size:10px;color:var(--text-mut);">→¥${Math.floor(p.stockPrice/r).toLocaleString()}</span>
                             </button>`).join('')}
                         </div>
                     </div>` : ''}
@@ -10460,9 +10565,9 @@ ${ds.desc}`)) {
         window.executeStockSplit = function (ratio) {
             let p = companies[0];
             if (!p.isPublic) return alert('上場企業のみ株式分割が可能です。');
-            if (p.stockPrice < 5000) return alert('株価¥5,000以上で実行可能です。');
+            if (p.stockPrice < 50000) return alert('株価¥50,000以上で実行可能です。');
             let newPrice = Math.floor(p.stockPrice / ratio);
-            if (newPrice < 500) return alert('分割後の株価が¥500未満になるため実行できません。');
+            if (newPrice < 1000) return alert('分割後の株価が¥1,000未満になるため実行できません。');
             if (!confirm(`【株式分割】${ratio}分割を実行しますか？\n\n株価: ¥${p.stockPrice.toLocaleString()} → ¥${newPrice.toLocaleString()}\n発行済株数: ${p.shares.toLocaleString()} → ${(p.shares * ratio).toLocaleString()}\n※ 時価総額は変わりません`)) return;
 
             let oldPrice = p.stockPrice;
@@ -10822,10 +10927,23 @@ ${ds.desc}`)) {
                                     <span style="color:#047857; font-size:13px; font-weight:bold;">💰 手元資金</span><span id="trade-current-cash" style="font-weight:900; color:var(--success); font-size:15px;">¥0</span>
                                 </div>
                                 
-                                <div style="display:flex; gap:10px; margin-bottom:15px;">
-                                    <button id="btn-trade-buy-mode" class="btn-primary" style="flex:1;" onclick="setTradeMode('buy')">買う</button>
-                                    <button id="btn-trade-sell-mode" class="btn-outline" style="flex:1;" onclick="setTradeMode('sell')">売る</button>
+                                <div style="display:flex; gap:10px; margin-bottom:10px;">
+                                    <button id="btn-trade-buy-mode" class="btn-primary" style="flex:1; border-radius:8px;" onclick="setTradeMode('buy')">買う</button>
+                                    <button id="btn-trade-sell-mode" class="btn-outline" style="flex:1; border-radius:8px;" onclick="setTradeMode('sell')">売る</button>
                                 </div>
+                                <div style="display:flex; gap:10px; margin-bottom:15px; background:#f1f5f9; padding:6px; border-radius:8px;">
+                                    <button id="btn-type-market" class="btn-primary" style="flex:1; padding:6px; font-size:12px; border-radius:6px; box-shadow:none;" onclick="setTradeType('market')">即時 (成行)</button>
+                                    <button id="btn-type-limit" class="btn-outline" style="flex:1; padding:6px; font-size:12px; border-radius:6px; box-shadow:none; border:none;" onclick="setTradeType('limit')">予約 (指値)</button>
+                                </div>
+                                <div id="trade-limit-params" style="display:none; margin-bottom:15px; background:#fffbeb; border:1px solid var(--warning); padding:10px; border-radius:8px;">
+                                    <div style="font-size:11px; margin-bottom:4px; font-weight:bold; color:var(--gold);">希望価格 (予約指値)</div>
+                                    <div style="display:flex; align-items:center; gap:5px;">
+                                        <span style="font-weight:bold;">¥</span>
+                                        <input type="number" id="trade-limit-price" value="0" style="flex:1; font-size:18px; font-weight:bold; text-align:right; border:1px solid var(--border); border-radius:4px; padding:4px;" oninput="calcTrade()">
+                                    </div>
+                                    <div style="font-size:10px; color:var(--text-mut); margin-top:4px; line-height:1.3;">※予約注文は次回の「次週へ進む」の際に指定価格に一瞬でも到達すれば自動的に約定します。</div>
+                                </div>
+
                                 <div style="display:flex; gap:8px; margin-bottom:8px;">
                                     <input type="number" id="trade-amount" value="100" min="1" oninput="syncTradeSlider()" style="font-size:18px; font-weight:bold; text-align:center;">
                                     <button class="btn-dark" style="padding:0 20px;" onclick="setTradeMax()">MAX</button>
@@ -10878,10 +10996,11 @@ ${ds.desc}`)) {
             document.getElementById('trade-current-cash').innerText = `¥${p.cash.toLocaleString()}`;
             document.getElementById('trade-available-shares').innerText = `市場出回: ${(window.getMarketShares(c)).toLocaleString()} 株`;
 
-            // 🌟 借金残高の表示
             document.getElementById('trade-loan-debt').innerText = debt.toLocaleString();
             document.getElementById('btn-des-execute').disabled = debt <= 0;
 
+            window.tradeType = 'market';
+            setTradeType('market');
             setTradeMode('buy');
             modal.style.display = 'flex';
         };
@@ -10903,18 +11022,47 @@ ${ds.desc}`)) {
             }
         };
 
+        window.setTradeType = function (t) {
+            window.tradeType = t;
+            let mBtn = document.getElementById('btn-type-market');
+            let lBtn = document.getElementById('btn-type-limit');
+            if (t === 'market') {
+                mBtn.className = 'btn-primary'; mBtn.style.border = 'none';
+                lBtn.className = 'btn-outline'; lBtn.style.border = 'none'; lBtn.style.background = 'transparent';
+                document.getElementById('trade-limit-params').style.display = 'none';
+                document.getElementById('trade-estimate-label').innerText = tradeMode === 'buy' ? '必要資金(概算):' : '受取額(概算):';
+            } else {
+                lBtn.className = 'btn-primary'; lBtn.style.border = 'none';
+                mBtn.className = 'btn-outline'; mBtn.style.border = 'none'; mBtn.style.background = 'transparent';
+                document.getElementById('trade-limit-params').style.display = 'block';
+                let c = companies.find(x => x.id === tradingCompanyId);
+                if (c && parseInt(document.getElementById('trade-limit-price').value||0) === 0) {
+                    document.getElementById('trade-limit-price').value = Math.floor(c.stockPrice * (tradeMode === 'buy' ? 0.95 : 1.05));
+                }
+                document.getElementById('trade-estimate-label').innerText = tradeMode === 'buy' ? '予約必要資金:' : '予約受取額:';
+            }
+            calcTrade();
+        };
+
         window.setTradeMode = function (m) {
             tradeMode = m;
             document.getElementById('btn-trade-buy-mode').className = m === 'buy' ? 'btn-primary' : 'btn-outline';
             document.getElementById('btn-trade-sell-mode').className = m === 'sell' ? 'btn-danger' : 'btn-outline';
-            document.getElementById('trade-estimate-label').innerText = m === 'buy' ? '必要資金:' : '受取額:';
+            if (window.tradeType === 'market') {
+                document.getElementById('trade-estimate-label').innerText = m === 'buy' ? '必要資金(概算):' : '受取額(概算):';
+            } else {
+                document.getElementById('trade-estimate-label').innerText = m === 'buy' ? '予約必要資金:' : '予約受取額:';
+                let c = companies.find(x => x.id === tradingCompanyId);
+                if (c) document.getElementById('trade-limit-price').value = Math.floor(c.stockPrice * (m === 'buy' ? 0.95 : 1.05));
+            }
             calcTrade();
         };
 
         window.calcTrade = function () {
             let c = companies.find(x => x.id === tradingCompanyId);
             let a = parseInt(document.getElementById('trade-amount').value) || 0;
-            document.getElementById('trade-estimate-total').innerText = `¥${(c.stockPrice * a).toLocaleString()}`;
+            let price = window.tradeType === 'limit' ? (parseInt(document.getElementById('trade-limit-price').value) || 0) : c.stockPrice;
+            document.getElementById('trade-estimate-total').innerText = `¥${(price * a).toLocaleString()}`;
             // スライダー表示をbuyモードのときだけ更新
             if (tradeMode === 'buy') {
                 let _trFloat = window.getFloatShares(c);
@@ -10938,11 +11086,13 @@ ${ds.desc}`)) {
 
         window.setTradeMax = function () {
             let c = companies.find(x => x.id === tradingCompanyId), p = companies[0];
+            let price = window.tradeType === 'limit' ? (parseInt(document.getElementById('trade-limit-price').value) || c.stockPrice) : c.stockPrice;
             if (tradeMode === 'buy') {
                 let avail = window.getMarketShares(c);
-                document.getElementById('trade-amount').value = Math.min(avail, Math.floor(p.cash / c.stockPrice));
+                document.getElementById('trade-amount').value = Math.min(avail, Math.floor(p.cash / price));
             } else { document.getElementById('trade-amount').value = c.shareholders['player'] || 0; }
             calcTrade();
+
         };
 
         window.submitAuctionBid = function(sellerId, targetId, topBidderId, topBid) {
@@ -10981,9 +11131,51 @@ ${ds.desc}`)) {
         };
 
         window.executeTrade = function () {
-            let a = parseInt(document.getElementById('trade-amount').value), c = companies.find(x => x.id === tradingCompanyId), p = companies[0], cost = c.stockPrice * a;
+            let originalAmount = parseInt(document.getElementById('trade-amount').value);
+            let a = originalAmount;
+            let c = companies.find(x => x.id === tradingCompanyId), p = companies[0];
             if (isNaN(a) || a <= 0) return;
+            
+            if (window.tradeType === 'limit') {
+                // 指値注文の受付処理
+                let limitPrice = parseInt(document.getElementById('trade-limit-price').value);
+                if (isNaN(limitPrice) || limitPrice <= 0) return alert("希望価格を正しく入力してください。");
+                
+                if (tradeMode === 'buy') {
+                    let cost = limitPrice * a;
+                    if (p.cash < cost) return alert("予約資金が不足しています。"); // Funds are NOT deducted immediately, just checked. WAIT, we should check it, but what if they spend it? We just fail it on execute Turn.
+                    addLog(`【注文受付】${c.name.replace(/\[.*?\]\s*/,'')} の買い指値注文を受け付けました (${a.toLocaleString()}株 @ ¥${limitPrice.toLocaleString()})。`, 'normal', '市場');
+                } else {
+                    let o = c.shareholders['player'] || 0;
+                    if (o < a) return alert("保有株数が不足しています。");
+                    addLog(`【注文受付】${c.name.replace(/\[.*?\]\s*/,'')} の売り指値注文を受け付けました (${a.toLocaleString()}株 @ ¥${limitPrice.toLocaleString()})。`, 'normal', '市場');
+                }
+                
+                if (!p.pendingOrders) p.pendingOrders = [];
+                p.pendingOrders.push({ id: Date.now() + Math.floor(Math.random()*100), coId: c.id, type: tradeMode, amount: a, price: limitPrice });
+                
+                closeModal('trade-modal');
+                updateDashboard();
+                if (typeof renderPortfolio === 'function') renderPortfolio();
+                return;
+            }
+            
+            // 流動性の初期化（念のため）
+            if (!c.weeklyVolume) {
+                let floatS = (c.shareholders && c.shareholders['market']) ? c.shareholders['market'] : 0;
+                c.weeklyVolume = Math.max(1, Math.floor(c.shares * 0.02) + Math.floor(floatS * 0.10));
+            }
+            if (c.usedVolume === undefined) c.usedVolume = 0;
+            let availableVolume = c.weeklyVolume - c.usedVolume;
+
             if (tradeMode === 'buy') {
+                if (availableVolume < a) {
+                    alert(`【注文制限】今週の市場の売り手（流動性）が不足しています。\n約定可能上限は ${availableVolume.toLocaleString()}株 です。`);
+                    a = availableVolume;
+                    if (a <= 0) return;
+                    document.getElementById('trade-amount').value = a;
+                }
+                let cost = c.stockPrice * a;
                 if (p.cash < cost) return alert("資金不足です！");
                 if (a > window.getMarketShares(c)) return alert("市場に出回っている株が不足しています。");
 
@@ -10991,7 +11183,7 @@ ${ds.desc}`)) {
                 let newOwned = currentOwned + a;
                 let newRatio = newOwned / c.shares;
                 let oldRatio = currentOwned / c.shares;
-                // 市場直接買付は40%未満に制限
+                
                 if (newRatio >= 0.40 && c.id !== 'player') return alert("【法規制】市場での直接買付は発行済株式の40%未満に制限されています。\n過半数を取得して買収するには「TOB (公開買付)」を宣言してください。");
 
                 p.cash -= cost;
@@ -11000,16 +11192,28 @@ ${ds.desc}`)) {
                     c.shareholders['market'] = Math.max(0, (c.shareholders['market'] || 0) - a);
                 }
                 c.playerTotalCost += cost;
+                c.usedVolume += a; // 取引枠を消費
+                
                 let _cName = c.name.replace(/\[.*?\]\s*/, '');
                 let _newPct = (newRatio * 100).toFixed(1);
                 addLog(`【株式取得】${_cName} を ${a.toLocaleString()}株 購入（¥${Math.floor(cost / 10000).toLocaleString()}万）→ 保有${_newPct}%`, 'success', '自社', 3);
-                // マイルストーン通知
                 if (oldRatio < 0.05 && newRatio >= 0.05) addLog(`【大量保有報告】${_cName} の株式5%を突破。大量保有報告義務が発生しました。`, 'news', '自社', 4);
                 if (oldRatio < 0.10 && newRatio >= 0.10) addLog(`【主要株主】${_cName} の株式10%を取得。主要株主として登録されます。`, 'alert', '自社', 4);
                 if (oldRatio < 0.20 && newRatio >= 0.20) addLog(`【筆頭株主】${_cName} の株式20%を取得！持分法適用関連会社化。経営への影響力が増大します。`, 'alert', '自社', 5);
                 if (oldRatio < 0.33 && newRatio >= 0.33) addLog(`【拒否権取得】${_cName} の株式1/3超を取得！重要事項の拒否権を獲得しました。TOBで過半数取得を目指しましょう。`, 'alert', '自社', 5);
             } else {
-                let o = c.shareholders['player'] || 0; if (o < a) return alert("保有株数が不足しています。");
+                if (c.isLimitDown) return alert("【売却不可】現在ストップ安のため、市場に買い手が存在しません。\n取引成立不可のため、買い注文が入る（来週以降）のをお待ちください。");
+                
+                if (availableVolume < a) {
+                    alert(`【注文制限】市場の買い手（流動性）が不足しています。\n今週の売却上限は ${availableVolume.toLocaleString()}株 です。`);
+                    a = availableVolume;
+                    if (a <= 0) return;
+                    document.getElementById('trade-amount').value = a;
+                }
+                let cost = c.stockPrice * a;
+                let o = c.shareholders['player'] || 0; 
+                if (o < a) return alert("保有株数が不足しています。");
+                
                 let profitPerShare = c.stockPrice - (c.playerTotalCost / o);
                 let totalProfit = profitPerShare * a;
                 window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + totalProfit;
@@ -11019,11 +11223,16 @@ ${ds.desc}`)) {
                 c.shareholders['player'] -= a;
                 if (c.isPublic) c.shareholders['market'] = (c.shareholders['market'] || 0) + a;
                 if (c.shareholders['player'] === 0) c.playerTotalCost = 0;
+                
+                c.usedVolume += a; // 取引枠を消費
+
                 let _cName2 = c.name.replace(/\[.*?\]\s*/, '');
                 let _profSign = totalProfit >= 0 ? '+' : '';
                 addLog(`【株式売却】${_cName2} ${a.toLocaleString()}株 売却（売却益 ${_profSign}¥${Math.floor(totalProfit / 10000).toLocaleString()}万）`, totalProfit >= 0 ? 'success' : 'warning', '自社', 3);
             }
             closeModal('trade-modal'); updateDashboard(); renderPortfolio();
+            // 売買後にUIを再描画するため再度モーダルを開く処理
+            setTimeout(() => { if(window.openCompanyModal) window.openCompanyModal(c.id); }, 100);
         };
 
 
@@ -12602,6 +12811,104 @@ ${ds.desc}`)) {
                 companies.forEach(c => { if (c.id !== cid && c.shareholders[cid] > 0) { portCount++; portfolioHtml += `<div class="flex-between" style="border-bottom:1px dashed var(--border);padding:10px 0;font-size:13px;"><span>📈 ${c.name.replace(/\[.*?\]\s*/, '').substring(0, 18)}</span><span style="font-weight:bold;color:var(--primary);">¥${(c.stockPrice * c.shareholders[cid] / 10000).toLocaleString()}万</span></div>`; } });
                 if (portCount === 0) portfolioHtml = '<div style="color:var(--text-mut);text-align:center;padding:15px;">保有株式なし</div>';
 
+                // ================= 最新株価指標と板情報・ローソク足チャートの生成 =================
+                window._drawCandleChart = function(canvasId, ohlcvData) {
+                    let canvas = document.getElementById(canvasId);
+                    if(!canvas || !ohlcvData || ohlcvData.length === 0) return;
+                    let ctx = canvas.getContext('2d');
+                    let W = canvas.width = canvas.parentElement.clientWidth;
+                    let H = canvas.height = 160;
+                    ctx.clearRect(0, 0, W, H);
+                    
+                    let maxP = Math.max(...ohlcvData.map(d=>d.h));
+                    let minP = Math.min(...ohlcvData.map(d=>d.l));
+                    let range = maxP - minP || 1;
+                    
+                    let padding = 10;
+                    let usableH = H - padding * 2;
+                    let candleW = Math.max(2, Math.floor((W - 20) / 20) - 2);
+                    
+                    ohlcvData.slice(-20).forEach((d, i) => {
+                        let x = 10 + i * (candleW + 4);
+                        let yHigh = padding + usableH * (1 - (d.h - minP) / range);
+                        let yLow = padding + usableH * (1 - (d.l - minP) / range);
+                        let yOpen = padding + usableH * (1 - (d.o - minP) / range);
+                        let yClose = padding + usableH * (1 - (d.c - minP) / range);
+                        
+                        let color = d.c >= d.o ? '#ef4444' : '#10b981'; // 日本：陽線（+）赤、陰線（-）緑
+                        ctx.strokeStyle = color;
+                        ctx.fillStyle = color;
+                        
+                        ctx.beginPath();
+                        ctx.moveTo(x + candleW/2, yHigh);
+                        ctx.lineTo(x + candleW/2, yLow);
+                        ctx.stroke();
+                        
+                        let bodyTop = Math.min(yOpen, yClose);
+                        let bodyH = Math.max(1, Math.abs(yOpen - yClose));
+                        ctx.fillRect(x, bodyTop, candleW, bodyH);
+                    });
+                };
+
+                let _tProf = (target.lastQProfit || 0) * 4;
+                let _tAssets = target.cash + (target.termDeposits ? target.termDeposits.reduce((s,t)=>s+t.amount,0) : 0);
+                let _per = _tProf > 0 ? (target.marketCap / _tProf).toFixed(1) : '---';
+                let _pbr = _tAssets > 0 ? (target.marketCap / _tAssets).toFixed(2) : '---';
+                let _latestVolume = (target._ohlcv && target._ohlcv.length > 0) ? target._ohlcv[target._ohlcv.length - 1].v : Math.floor(target.shares * 0.05);
+
+                let _needed = Math.floor(target.shares * 0.51) + 1;
+                let _curr = target.shareholders['player'] || 0;
+                let _rem = _needed - _curr;
+                let _tobHtml = '';
+                if (_curr > 0 && target.id !== 'player') {
+                    if (_curr >= _needed) {
+                        _tobHtml = `<div style="background:#f0fdf4; border:1px solid #16a34a; padding:8px; border-radius:8px; text-align:center; font-size:12px; font-weight:bold; color:#16a34a; margin-bottom:12px;">✅ 経営権（過半数）取得済み</div>`;
+                    } else {
+                        _tobHtml = `<div style="background:#fffbeb; border:1px solid #f59e0b; padding:8px; border-radius:8px; text-align:center; margin-bottom:12px;">
+                            <div style="font-size:10px; color:#b45309; font-weight:bold; margin-bottom:2px;">敵対的TOB・過半数まで あと</div>
+                            <div style="font-size:16px; font-weight:900; color:#d97706;">${_rem.toLocaleString()} <span style="font-size:12px;">株</span></div>
+                            <div style="font-size:10px; color:#b45309; margin-top:2px;">(時価換算: 約¥${Math.floor(_rem * target.stockPrice / 10000).toLocaleString()}万)</div>
+                        </div>`;
+                    }
+                }
+
+                let _pSrc = target.stockPrice;
+                let _bookStr = `<table style="width:100%; font-size:11px; text-align:center; border-collapse:collapse; margin-top:8px;">
+                    <tr style="color:#64748b; font-size:9px; border-bottom:1px solid var(--border);"><th style="padding:4px 0;">売気配(株)</th><th>予約価格</th><th>買気配(株)</th></tr>
+                `;
+                for(let i=3; i>=1; i--) {
+                    let _pr = _pSrc + Math.floor(_pSrc * 0.02 * i);
+                    let _vol = Math.floor(_latestVolume * 0.15 * (Math.random()*0.5+0.5));
+                    _bookStr += `<tr><td style="color:#ef4444; padding:2px;">${_vol.toLocaleString()}</td><td style="font-weight:bold;">${_pr.toLocaleString()}</td><td></td></tr>`;
+                }
+                _bookStr += `<tr style="background:#f1f5f9; border-top:1px solid var(--border); border-bottom:1px solid var(--border);"><td></td><td style="font-weight:900; font-size:13px; padding:3px 0;">${_pSrc.toLocaleString()}</td><td></td></tr>`;
+                for(let i=1; i<=3; i++) {
+                    let _pr = _pSrc - Math.floor(_pSrc * 0.02 * i);
+                    if (_pr <= 0) break;
+                    let _vol = Math.floor(_latestVolume * 0.15 * (Math.random()*0.5+0.5));
+                    _bookStr += `<tr><td></td><td style="font-weight:bold;">${_pr.toLocaleString()}</td><td style="color:#10b981; padding:2px;">${_vol.toLocaleString()}</td></tr>`;
+                }
+                _bookStr += `</table>`;
+
+                let _marketDataHtml = `
+                <div class="card" style="margin:0;padding:15px;border-left:4px solid #3b82f6;">
+                    <h5 style="margin:0 0 10px 0;font-size:14px;">📈 市場データ・注文板</h5>
+                    ${_tobHtml}
+                    <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:14px; border-bottom:1px solid var(--border); padding-bottom:8px;">
+                        <div style="text-align:center;"><div style="font-size:10px; color:#64748b;">PER (予想)</div><div style="font-weight:bold;">${_per} 倍</div></div>
+                        <div style="text-align:center;"><div style="font-size:10px; color:#64748b;">PBR (実績)</div><div style="font-weight:bold;">${_pbr} 倍</div></div>
+                        <div style="text-align:center;"><div style="font-size:10px; color:#64748b;">週間取引高</div><div style="font-weight:bold;">${_latestVolume.toLocaleString()}</div></div>
+                    </div>
+                    <div style="width:100%; height:160px; position:relative; margin-bottom:15px;"><canvas id="candle-chart-target"></canvas></div>
+                    <div style="font-size:11px; color:var(--text-mut); font-weight:bold; margin-bottom:4px;">📊 予想気配値 (参考)</div>
+                    <div style="background:#fff; border:1px solid var(--border); border-radius:8px; padding:4px;">
+                        ${_bookStr}
+                    </div>
+                    ${target.id !== 'player' && target.isPublic ? `<button class="btn-primary btn-large" style="width:100%; margin-top:15px; font-weight:900;" onclick="openTradeModal('${target.id}')">株取引 (指値予約/成行)</button>` : ''}
+                </div>`;
+                // =========================================================
+
+
                 document.getElementById('company-modal-desc').innerHTML = `
                 <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:start;">
                     <div class="card" style="flex:1 1 320px;margin:0;padding:20px;border-top:5px solid var(--primary);box-shadow:var(--shadow-md);">
@@ -12628,6 +12935,7 @@ ${ds.desc}`)) {
                         </div>
                     </div>
                     <div style="flex:1 1 240px;display:flex;flex-direction:column;gap:12px;">
+                        ${target.isPublic ? _marketDataHtml : ''}
                         <div class="card" style="margin:0;padding:15px;border-left:4px solid #8b5cf6;"><h5 style="margin:0 0 10px 0;font-size:14px;">🏢 所有不動産 (${allProps.length})</h5><div style="max-height:150px;overflow-y:auto;padding-right:5px;">${propHtml}</div></div>
                         <div class="card" style="margin:0;padding:15px;border-left:4px solid var(--warning);"><h5 style="margin:0 0 10px 0;font-size:14px;">🤝 傘下企業 (${subs.length})</h5><div style="max-height:150px;overflow-y:auto;padding-right:5px;">${subHtml}</div></div>
                         <div class="card" style="margin:0;padding:15px;border-left:4px solid var(--success);"><h5 style="margin:0 0 10px 0;font-size:14px;">💼 保有株 (${portCount})</h5><div style="padding-right:5px;">${portfolioHtml}</div></div>
@@ -12719,6 +13027,7 @@ ${ds.desc}`)) {
                 </div>`;
 
                 setTimeout(() => {
+                    if (target.isPublic && target._ohlcv) window._drawCandleChart('candle-chart-target', target._ohlcv);
                     let ctx = document.getElementById('shareholder-chart');
                     if (!ctx) return;
                     ctx = ctx.getContext('2d');
@@ -13160,7 +13469,7 @@ ${ds.desc}`)) {
                         totalStockVal += c.stockPrice * o;
                         totalGain += c.stockPrice * o - (c.playerTotalCost || 0);
                     });
-                    let gainColor = totalGain >= 0 ? '#4ade80' : '#f87171';
+                    let gainColor = totalGain >= 0 ? '#ef4444' : '#10b981';
                     let gainSign = totalGain >= 0 ? '+' : '';
 
                     let sectorHtml = Object.keys(bySector).map(s => {
@@ -13169,14 +13478,14 @@ ${ds.desc}`)) {
                             let mktVal = c.stockPrice * o;
                             let gain = mktVal - (c.playerTotalCost || 0);
                             let gainPct = (c.playerTotalCost || 0) > 0 ? (gain / (c.playerTotalCost || 1)) * 100 : 0;
-                            let gc = gain >= 0 ? '#4ade80' : '#f87171';
+                            let gc = gain >= 0 ? '#ef4444' : '#10b981';
                             let gs = gain >= 0 ? '+' : '';
                             let pct = (window.getFloatShares(c) > 0 ? (o / window.getFloatShares(c)) * 100 : 0).toFixed(1);
                             let badge = window.getCountryBadge ? window.getCountryBadge(c.country) : '';
                             let hist = (stockHistory.datasets?.[c.id]) || [c.stockPrice];
                             let prevP = hist.length > 1 ? hist[hist.length - 2] : c.stockPrice;
                             let wkPct = prevP > 0 ? ((c.stockPrice - prevP) / prevP) * 100 : 0;
-                            let wkColor = wkPct >= 0 ? '#4ade80' : '#f87171';
+                            let wkColor = wkPct >= 0 ? '#ef4444' : '#10b981';
                             let wkSign = wkPct >= 0 ? '+' : '';
                             let divPs = (c.id !== 'player' && c.dividendRate > 0 && c.lastQProfit > 0)
                                 ? Math.floor((c.lastQProfit * (c.dividendRate / 100)) / c.shares) : 0;
