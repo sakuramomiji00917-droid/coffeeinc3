@@ -5214,9 +5214,9 @@
                                     }
                                 }
                             }
-                            else if (currentShares < Math.floor(target.shares * 0.49) && Math.random() < 0.15) {
+                            else if (currentShares < Math.floor(target.shares * 0.40) && Math.random() < 0.15) {
                                 let marketFloat = window.getMarketShares(target);
-                                let maxBuyShares = Math.floor(target.shares * (Math.random() * 0.1 + 0.05)), limit = Math.floor(target.shares * 0.49) - currentShares, sharesToBuy = Math.min(Math.floor((c.cash * 0.3) / target.stockPrice), maxBuyShares, limit, marketFloat);
+                                let maxBuyShares = Math.floor(target.shares * (Math.random() * 0.1 + 0.05)), limit = Math.floor(target.shares * 0.40) - currentShares, sharesToBuy = Math.min(Math.floor((c.cash * 0.3) / target.stockPrice), maxBuyShares, limit, marketFloat);
                                 if (sharesToBuy > 100) {
                                     c.cash -= sharesToBuy * target.stockPrice;
                                     target.shareholders[c.id] = currentShares + sharesToBuy;
@@ -6787,7 +6787,20 @@
                             proposals.push({ tag: '🔴 買収', title: `📈 他社株の積極投資`, desc: `cash40%で有望企業5社に分散投資。ポートフォリオ拡大。`,
                                 action: () => {
                                     let investAmt = Math.floor(c.cash * 0.40); let targets = companies.filter(t => t.id !== c.id && t.isPublic && !t.isBankrupt && t.stockPrice > 0).sort(() => Math.random()-0.5).slice(0,5); let spent = 0;
-                                    targets.forEach(t => { if (spent >= investAmt) return; let buyAmt = Math.min(Math.floor(investAmt/targets.length), investAmt-spent); let shares = Math.floor(buyAmt/t.stockPrice); if (shares > 0) { c.cash -= shares*t.stockPrice; t.shareholders[c.id] = (t.shareholders[c.id]||0)+shares; spent += shares*t.stockPrice; } });
+                                    targets.forEach(t => { 
+                                        if (spent >= investAmt) return; 
+                                        let buyAmt = Math.min(Math.floor(investAmt/targets.length), investAmt-spent); 
+                                        let targetShares = Math.floor(buyAmt/t.stockPrice); 
+                                        let maxHold = Math.floor(t.shares * 0.40) - (t.shareholders[c.id]||0);
+                                        let marketAvail = window.getMarketShares ? window.getMarketShares(t) : (t.shareholders['market']||0);
+                                        let shares = Math.max(0, Math.min(targetShares, maxHold, marketAvail));
+                                        if (shares > 0) { 
+                                            c.cash -= shares*t.stockPrice; 
+                                            t.shareholders[c.id] = (t.shareholders[c.id]||0)+shares; 
+                                            t.shareholders['market'] = Math.max(0, (t.shareholders['market']||0)-shares); 
+                                            spent += shares*t.stockPrice; 
+                                        } 
+                                    });
                                     addLog(`【総会】${_cn}が¥${Math.floor(spent/1e4).toLocaleString()}万を分散投資。`, 'success', '経済');
                                 }
                             });
@@ -12187,7 +12200,19 @@ ${ds.desc}`)) {
             sub.cash += totalVal;
             let newTargets = companies.filter(t => t.id !== sub.id && t.isPublic && !t.isBankrupt && !holdings.some(h => h.id === t.id)).sort(() => Math.random()-0.5).slice(0,5);
             let spent = 0;
-            newTargets.forEach(t => { let buyAmt = Math.floor(totalVal/5); let shares = Math.floor(buyAmt/t.stockPrice); if (shares > 0) { sub.cash -= shares*t.stockPrice; t.shareholders[sub.id] = (t.shareholders[sub.id]||0)+shares; t.shareholders['market'] = Math.max(0,(t.shareholders['market']||0)-shares); spent += shares*t.stockPrice; } });
+            newTargets.forEach(t => { 
+                let buyAmt = Math.floor(totalVal/5); 
+                let targetShares = Math.floor(buyAmt/t.stockPrice); 
+                let maxHold = Math.floor(t.shares * 0.40) - (t.shareholders[sub.id]||0);
+                let marketAvail = window.getMarketShares ? window.getMarketShares(t) : (t.shareholders['market']||0);
+                let shares = Math.max(0, Math.min(targetShares, maxHold, marketAvail));
+                if (shares > 0) { 
+                    sub.cash -= shares*t.stockPrice; 
+                    t.shareholders[sub.id] = (t.shareholders[sub.id]||0)+shares; 
+                    t.shareholders['market'] = Math.max(0,(t.shareholders['market']||0)-shares); 
+                    spent += shares*t.stockPrice; 
+                } 
+            });
             addLog(`【子会社命令】${sub.name.replace(/\[.*?\]\s*/g,'')} がポートフォリオ入替。¥${Math.floor(spent/1e4).toLocaleString()}万を5社に再投資。`, 'success', 'M&A'); renderSubsidiaryList(); updateDashboard();
         };
         // 📊 証券: マーケットメイカー
