@@ -4437,6 +4437,9 @@
                     }
                 }
 
+                // ── OHLCV: 始値を株価変動前に記録 ──
+                let _weekOpenPrice = c.stockPrice;
+
                 // 🌟 企業の「業績（利益）」と「性格」に基づくリアルな株価変動
                 // 1. 利益率に基づくベース変動 (最大±4%)
                 let perf = (prof / (c.marketCap || 1)) * 5;
@@ -4512,7 +4515,7 @@
 
                 // ── M&A・証券 2.0: OHLCV データの保存 ──
                 if (!c._ohlcv) c._ohlcv = [];
-                let _oPrice = c.prevStockPrice || c.stockPrice;
+                let _oPrice = _weekOpenPrice;  // 変動前の始値を使用（陰線が正しく表示される）
                 let _cPrice = c.stockPrice;
                 let _vVol = Math.floor((Math.floor(c.shares * 0.02) + Math.floor((c.shareholders['market'] || 0) * 0.10)) * (Math.random() * 0.5 + 0.5));
                 let _hiBase = Math.max(_oPrice, _cPrice);
@@ -9776,8 +9779,8 @@ ${ds.desc}`)) {
                         '<div style="font-size:9px;color:var(--text-mut);">利率: ' + ((selBank.loanRate || 0.005) * 100).toFixed(2) + '%/週</div></div>' +
                         '<div style="background:#ecfdf5;padding:10px;border-radius:8px;border:1px solid #10b981;text-align:center;">' +
                         '<div style="font-size:10px;color:var(--text-mut);font-weight:bold;margin-bottom:3px;">あと借入可能</div>' +
-                        <div style="font-size:14px;font-weight:900;color:#10b981;">¥' + Math.floor(canBorrow / 10000).toLocaleString() + '万</div>' +
-                    '<div style="font-size:9px;color:var(--text-mut);">' + Math.floor(canBorrow / 10000 / 100) + '00万単位</div></div>' +
+                        '<div style="font-size:14px;font-weight:900;color:#10b981;">¥' + Math.floor(canBorrow / 10000).toLocaleString() + '万</div>' +
+                        '<div style="font-size:9px;color:var(--text-mut);">' + Math.floor(canBorrow / 10000 / 100) + '00万単位</div></div>' +
                         '</div>';
                 })()}
                     <div class="grid-2" style="gap:15px; margin-bottom:20px;">
@@ -10503,18 +10506,18 @@ ${ds.desc}`)) {
                 setTimeout(() => {
                     let _lobbyInput = document.getElementById('lobby-extra-input');
                     if (_lobbyInput) {
-                        _lobbyInput.oninput = function() {
-                            let extra = (parseInt(this.value)||0)*10000;
+                        _lobbyInput.oninput = function () {
+                            let extra = (parseInt(this.value) || 0) * 10000;
                             let total = _pkgCost + extra;
-                            let extraSteps = Math.floor(extra/100000000);
-                            let extraBonus = Math.min(0.20, extraSteps*0.05);
+                            let extraSteps = Math.floor(extra / 100000000);
+                            let extraBonus = Math.min(0.20, extraSteps * 0.05);
                             let rate = Math.min(0.95, _pkgBase + extraBonus + _cfoBonus);
-                            document.getElementById('lobby-total-disp').textContent = Math.floor(total/10000).toLocaleString();
-                            document.getElementById('lobby-rate-disp').textContent = Math.round(rate*100)+'%';
+                            document.getElementById('lobby-total-disp').textContent = Math.floor(total / 10000).toLocaleString();
+                            document.getElementById('lobby-rate-disp').textContent = Math.round(rate * 100) + '%';
                             let bonusParts = [];
-                            if (extraBonus > 0) bonusParts.push('+'+Math.round(extraBonus*100)+'%（追加献金）');
-                            if (_cfoBonus > 0) bonusParts.push('+'+Math.round(_cfoBonus*100)+'%（CFO）');
-                            document.getElementById('lobby-bonus-disp').textContent = bonusParts.length ? '（内訳: '+bonusParts.join(' / ')+'）' : '';
+                            if (extraBonus > 0) bonusParts.push('+' + Math.round(extraBonus * 100) + '%（追加献金）');
+                            if (_cfoBonus > 0) bonusParts.push('+' + Math.round(_cfoBonus * 100) + '%（CFO）');
+                            document.getElementById('lobby-bonus-disp').textContent = bonusParts.length ? '（内訳: ' + bonusParts.join(' / ') + '）' : '';
                         };
                     }
                 }, 50);
@@ -10881,7 +10884,7 @@ ${ds.desc}`)) {
                     let yH = yPrice(d.h), yL = yPrice(d.l);
                     let yO = yPrice(d.o), yC = yPrice(d.c);
                     let isUp = d.c >= d.o;
-                    let upColor = '#0ea5e9'; // 陽線=青
+                    let upColor = '#22c55e'; // 陽線=緑
                     let downColor = '#ef4444'; // 陰線=赤
 
                     // ヒゲ（wick）
@@ -10920,7 +10923,7 @@ ${ds.desc}`)) {
                     let vol = d.v || 0;
                     let barH = Math.max(1, (vol / maxVol) * volUsable);
                     let isUp = d.c >= d.o;
-                    ctx.fillStyle = isUp ? 'rgba(14,165,233,0.45)' : 'rgba(239,68,68,0.45)';
+                    ctx.fillStyle = isUp ? 'rgba(34,197,94,0.45)' : 'rgba(239,68,68,0.45)';
                     ctx.fillRect(x, volTop + volUsable - barH, candleW, barH);
                 });
 
@@ -10928,14 +10931,14 @@ ${ds.desc}`)) {
                 if (currentPrice !== undefined) {
                     let currY = yPrice(currentPrice);
                     if (currY >= 0 && currY <= priceH) {
-                        ctx.strokeStyle = '#38bdf8';
+                        ctx.strokeStyle = '#22c55e';
                         ctx.lineWidth = 1;
                         ctx.setLineDash([6, 3]);
                         ctx.beginPath(); ctx.moveTo(0, currY); ctx.lineTo(chartW, currY); ctx.stroke();
                         ctx.setLineDash([]);
                         // 価格ラベル
                         let labelW = yAxisW - 4;
-                        ctx.fillStyle = '#0ea5e9';
+                        ctx.fillStyle = '#22c55e';
                         ctx.beginPath();
                         ctx.moveTo(chartW, currY);
                         ctx.lineTo(chartW + 4, currY - 8);
@@ -10964,7 +10967,7 @@ ${ds.desc}`)) {
                 let diff = sel.stockPrice - prevP;
                 let diffPct = prevP > 0 ? (diff / prevP) * 100 : 0;
                 let isUp = diff >= 0;
-                let priceColor = isUp ? '#0284c7' : '#ef4444';
+                let priceColor = isUp ? '#22c55e' : '#ef4444';
                 let sign = isUp ? '+' : '';
                 let cap = sel.marketCap >= 1e8 ? (sel.marketCap / 1e8).toFixed(1) + '億' : (sel.marketCap / 1e4).toLocaleString() + '万';
 
@@ -11070,7 +11073,7 @@ ${ds.desc}`)) {
                 let prevP = hist.length > 1 ? hist[hist.length - 2] : c.stockPrice;
                 let diffPct = prevP > 0 ? ((c.stockPrice - prevP) / prevP) * 100 : 0;
                 let isUp = c.stockPrice >= prevP;
-                let priceColor = isUp ? '#0284c7' : '#ef4444'; // 上昇=青、下落=赤
+                let priceColor = isUp ? '#22c55e' : '#ef4444'; // 上昇=緑、下落=赤
                 let sign = isUp ? '+' : '';
                 let cap = c.marketCap >= 1e8 ? (c.marketCap / 1e8).toFixed(1) + '億' : (c.marketCap / 1e4).toLocaleString() + '万';
                 let isSel = c.id === window._marketSelectedId;
