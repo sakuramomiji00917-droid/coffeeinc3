@@ -199,6 +199,23 @@
             transform: translateY(-2px);
         }
 
+        /* 📉 株式市場レスポンシブ調整 */
+        .market-chart-row {
+            display: flex;
+            gap: 12px;
+            margin-top: 8px;
+        }
+
+        @media (max-width: 600px) {
+            .market-chart-row {
+                flex-direction: column !important;
+            }
+            .market-sidebar-panel {
+                width: 100% !important;
+                flex-shrink: 1 !important;
+            }
+        }
+
         .card-header {
             font-weight: 800;
             font-size: 13px;
@@ -582,25 +599,54 @@
             /* ターン進行フローティングボタン (FAB) */
             .btn-next-turn-fab {
                 position: fixed;
-                bottom: 90px;
-                right: 20px;
-                width: 64px;
-                height: 64px;
+                bottom: 100px; /* 位置を少し調整 */
+                right: 24px;
+                width: 68px;
+                height: 68px;
                 border-radius: 50%;
-                background: var(--primary);
+                background: linear-gradient(135deg, var(--primary), #1d4ed8);
                 color: white;
-                font-size: 24px;
+                font-size: 26px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                box-shadow: 0 10px 25px rgba(37, 99, 235, 0.5);
-                z-index: 999;
-                transition: transform 0.2s;
+                box-shadow: 0 12px 30px rgba(37, 99, 235, 0.4), inset 0 2px 4px rgba(255,255,255,0.3);
+                z-index: 9999;
+                cursor: pointer;
+                transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+                border: 2px solid rgba(255,255,255,0.1);
+            }
+
+            .btn-next-turn-fab:hover {
+                transform: scale(1.1) translateY(-5px);
+                box-shadow: 0 15px 35px rgba(37, 99, 235, 0.5);
             }
 
             .btn-next-turn-fab:active {
-                transform: scale(0.9);
+                transform: scale(0.95);
             }
+
+            .btn-next-turn-fab.processing {
+                background: #64748b;
+                pointer-events: none;
+                box-shadow: none;
+            }
+
+            /* スピナーアニメーション */
+            .loading-spinner {
+                width: 24px;
+                height: 24px;
+                border: 3px solid rgba(255, 255, 255, 0.3);
+                border-top: 3px solid white;
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+            }
+
+            @keyframes spin {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+
 
             /* スマホ用カード調整 */
             .grid-2,
@@ -810,7 +856,7 @@
             <div id="view-news" class="view-section"></div>
         </div>
 
-        <div class="btn-next-turn-fab" onclick="executeTurn()">⏭️</div>
+        <div class="btn-next-turn-fab" onclick="window.safeExecuteTurn()">📅</div>
         <div class="mobile-bottom-nav">
             <div class="bottom-nav-item active" id="mob-nav-stores" onclick="switchTab('stores')"><span
                     style="font-size:20px;">🏠</span><span>店舗</span></div>
@@ -1590,6 +1636,7 @@
                 this.digitalOwned = []; // デジタルサービスID配列
                 this.bizOwned = [];    // 新事業ID配列
                 this.shareholders = {}; this.playerTotalCost = 0; this.lastDividendPerShare = 0;
+                this.contracts = { logistics: null, it: null, insurance: {}, logByCountry: {}, itByCountry: {} };
                 this.color = id === 'player' ? '#2563eb' : `hsl(${Math.floor(Math.random() * 360)}, 70%, 50%)`;
                 if (id === 'player') this.shareholders['player'] = shares;
 
@@ -1744,6 +1791,11 @@
                 { id: 'bigTenant', prob: 0.02, name: '🏢 大口テナント獲得', desc: '所有ビルに大手企業が一括入居！NPC+3', dur: 1, effect: () => { let owned = []; Object.keys(globalNetworkData).forEach(rk => { globalNetworkData[rk].districts.forEach(dd => { dd.properties.forEach(pp => { if (pp.owner === 'player' && pp.npcSlots > 0 && pp.occupiedNPCSlots < pp.npcSlots) owned.push(pp); }); }); }); if (owned.length > 0) { let t = owned[Math.floor(Math.random() * owned.length)]; t.occupiedNPCSlots = Math.min(t.npcSlots, t.occupiedNPCSlots + 3); } }, clear: () => { } },
                 { id: 'fxShock', prob: 0.02, name: '💸 為替急変', desc: '海外店舗の売上に影響。±15%変動（4週間）', dur: 4, effect: () => { window._fxMult = Math.random() > 0.5 ? 1.15 : 0.85; }, clear: () => { delete window._fxMult; } },
                 { id: 'pandemic', prob: 0.005, name: '🦠 パンデミック', desc: '感染症の流行で全店客数-30%（12週間）', dur: 12, effect: () => { window._pandemicMult = 0.70; }, clear: () => { delete window._pandemicMult; } },
+                // 📊 セクター・材料イベント
+                { id: 'itBubble', prob: 0.015, name: '💻 次世代AI革命', desc: 'ITセクターへの期待が爆発。IT関連株が大幅上昇（8週間）', dur: 8, effect: () => { window._sectorDrifts['it'] = 0.06; }, clear: () => { delete window._sectorDrifts['it']; } },
+                { id: 'logiCrisis', prob: 0.012, name: '🚚 燃料コスト危機', desc: '原油高騰により物流網が圧迫。物流株が下落（6週間）', dur: 6, effect: () => { window._sectorDrifts['log'] = -0.05; }, clear: () => { delete window._sectorDrifts['log']; } },
+                { id: 'reCrash', prob: 0.008, name: '🏢 不動産バブル崩壊', desc: '都市再開発の停滞により、不動産株が急落（12週間）', dur: 12, effect: () => { window._sectorDrifts['re'] = -0.08; }, clear: () => { delete window._sectorDrifts['re']; } },
+                { id: 'coffeeTrend', prob: 0.015, name: '☕ 第4次コーヒーブーム', desc: '世界的な需要増によりコーヒー企業の評価が急上昇（8週間）', dur: 8, effect: () => { window._sectorDrifts['coffee'] = 0.07; }, clear: () => { delete window._sectorDrifts['coffee']; } },
             ];
             // イベント終了チェック
             Object.keys(window._activeEvents).forEach(eid => {
@@ -2369,51 +2421,49 @@
             globalEco.sort((a, b) => b.priority - a.priority);
 
             const buildItem = (log) => {
-                let isAlert = log.type === 'alert';
-                let isSucc = log.type === 'success';
-                let isWarn = log.type === 'warning';
-                let color = isAlert ? '#ef4444' : isSucc ? '#10b981' : isWarn ? '#f59e0b' : '#6b7280';
-                let icon = isAlert ? '⚠️' : isSucc ? '✨' : isWarn ? '⚡' : '📰';
                 let msgClean = log.msg.replace(/【.*?】/, '').trim();
+                let icon = { alert: '🚨', success: '📈', warning: '📉' }[log.type] || '🗞️';
                 return `
-                <div style="padding:10px 12px; background:rgba(255,255,255,0.7); border-left:3px solid ${color}; margin-bottom:8px; border-radius:6px; box-shadow:0 1px 2px rgba(0,0,0,0.03); display:flex; gap:10px; align-items:flex-start;">
-                    <div style="font-size:14px; margin-top:2px;">${icon}</div>
-                    <div>
-                        <div style="font-size:10px; font-weight:700; color:${color}; margin-bottom:2px;">${log.category}</div>
-                        <div style="font-size:13px; font-weight:600; color:#111827; line-height:1.4;">${msgClean}</div>
+                <div style="padding:14px 0; border-bottom:1px dashed #d1d5db; font-family:'Noto Serif JP',serif; display:flex; gap:12px; align-items:flex-start;">
+                    <div style="font-size:20px; line-height:1; opacity:0.8;">${icon}</div>
+                    <div style="flex:1;">
+                        <div style="font-size:10px; font-weight:700; color:#4b5563; margin-bottom:4px; letter-spacing:1px; text-transform:uppercase;">${log.category}</div>
+                        <div style="font-size:14px; font-weight:700; color:#111827; line-height:1.5;">${msgClean}</div>
                     </div>
                 </div>`;
             };
 
             let blocks = '';
-            if (myNews.length > 0) blocks += `<div style="margin-bottom:24px;"><div style="font-size:14px; font-weight:800; color:#065f46; margin-bottom:12px; display:flex; align-items:center; gap:6px; border-bottom:1px solid #d1fae5; padding-bottom:4px;">👑 自社・契約パートナーの動向</div>${myNews.map(buildItem).join('')}</div>`;
-            if (aiStrategy.length > 0) blocks += `<div style="margin-bottom:24px;"><div style="font-size:14px; font-weight:800; color:#1d4ed8; margin-bottom:12px; display:flex; align-items:center; gap:6px; border-bottom:1px solid #dbeafe; padding-bottom:4px;">🤖 AI企業の戦略・M&A</div>${aiStrategy.map(buildItem).join('')}</div>`;
-            if (globalEco.length > 0) blocks += `<div style="margin-bottom:24px;"><div style="font-size:14px; font-weight:800; color:#92400e; margin-bottom:12px; display:flex; align-items:center; gap:6px; border-bottom:1px solid #fef3c7; padding-bottom:4px;">🌍 世界市場・マクロ環境</div>${globalEco.map(buildItem).join('')}</div>`;
+            if (myNews.length > 0) blocks += `<div style="margin-bottom:28px;"><div style="font-size:12px; font-weight:900; color:#111827; margin-bottom:8px; padding-bottom:4px; border-bottom:2px solid #111827; display:flex; align-items:center; gap:8px;">● 自社及び主要取引の進捗</div>${myNews.map(buildItem).join('')}</div>`;
+            if (aiStrategy.length > 0) blocks += `<div style="margin-bottom:28px;"><div style="font-size:12px; font-weight:900; color:#111827; margin-bottom:8px; padding-bottom:4px; border-bottom:2px solid #111827; display:flex; align-items:center; gap:8px;">● 市場再編・競合他社の動向</div>${aiStrategy.map(buildItem).join('')}</div>`;
+            if (globalEco.length > 0) blocks += `<div style="margin-bottom:28px;"><div style="font-size:12px; font-weight:900; color:#111827; margin-bottom:8px; padding-bottom:4px; border-bottom:2px solid #111827; display:flex; align-items:center; gap:8px;">● 世界経済・マクロ指標</div>${globalEco.map(buildItem).join('')}</div>`;
 
-            if (blocks === '') blocks = `<div style="text-align:center; padding:40px; color:#6b7280; font-size:13px; font-weight:600;">今週の重要なニュースはありません。</div>`;
+            if (blocks === '') blocks = `<div style="text-align:center; padding:60px; color:#6b7280; font-family:'Noto Serif JP',serif; font-style:italic;">特筆すべき市場の変化は報告されていません。</div>`;
 
             modalsArea.insertAdjacentHTML('beforeend', `
-                <div id="weekly-news-screen" style="position:fixed; inset:0; z-index:100200; background:rgba(15,23,42,0.4); backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; padding:20px; animation:fadeIn 0.2s ease;">
-                    <style>@keyframes fadeIn { from{opacity:0;} to{opacity:1;} } @keyframes slideUp { from{transform:translateY(20px);opacity:0;} to{transform:translateY(0);opacity:1;} }</style>
-                    <div style="background:#f8fafc; width:100%; max-width:540px; max-height:85vh; border-radius:16px; box-shadow:0 20px 40px rgba(0,0,0,0.2); display:flex; flex-direction:column; overflow:hidden; font-family:'Inter','Noto Sans JP',sans-serif; animation:slideUp 0.3s ease forwards;">
+                <div id="weekly-news-screen" style="position:fixed; inset:0; z-index:100200; background:rgba(0,0,0,0.7); backdrop-filter:blur(8px); display:flex; align-items:center; justify-content:center; padding:20px; animation:fadeIn 0.2s ease;">
+                    <style>@keyframes fadeIn { from{opacity:0;} to{opacity:1;} } @keyframes slideUp { from{transform:translateY(30px);opacity:0;} to{transform:translateY(0);opacity:1;} }</style>
+                    <div style="background:#faf8f5; width:100%; max-width:620px; max-height:88vh; border:1px solid #d1d5db; box-shadow:0 30px 60px rgba(0,0,0,0.4); display:flex; flex-direction:column; overflow:hidden; font-family:'Noto Serif JP','Georgia',serif; animation:slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;">
                         
-                        <div style="background:linear-gradient(135deg, #1e293b, #334155); padding:20px 24px; color:#fff; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
-                            <div>
-                                <div style="font-size:10px; font-weight:700; color:#cbd5e1; letter-spacing:2px; margin-bottom:4px;">MORNING BRIEFING</div>
-                                <div style="font-size:20px; font-weight:900;">今週の要約 <span style="font-size:14px; font-weight:600; color:#94a3b8; margin-left:8px;">${weekStr}</span></div>
+                        <div style="text-align:center; padding:24px 30px 16px; border-bottom:3px double #111827; flex-shrink:0; position:relative;">
+                            <div style="font-size:10px; color:#6b7280; font-weight:800; letter-spacing:5px; margin-bottom:8px;">GLOBAL BUSINESS INTELLIGENCE</div>
+                            <div style="font-size:34px; font-weight:900; color:#111827; font-family:'Playfair Display','Noto Serif JP',serif; line-height:1; margin-bottom:4px;">THE M&A JOURNAL</div>
+                            <div style="font-size:12px; color:#4b5563; border-top:1px solid #111827; margin-top:10px; padding-top:8px;">
+                                特別朝刊 ─ ${weekStr} / 編集発行：グローバルトレーディングデスク
                             </div>
-                            <div style="font-size:32px; opacity:0.8;">☕</div>
                         </div>
 
-                        <div style="flex:1; overflow-y:auto; padding:24px; background:#f1f5f9; box-shadow:inset 0 2px 4px rgba(0,0,0,0.02);">
-                            ${blocks}
+                        <div style="flex:1; overflow-y:auto; padding:30px; background-image:radial-gradient(#d1d5db 0.5px, transparent 0.5px); background-size: 20px 20px; background-attachment: local;">
+                            <div style="background:rgba(250, 248, 245, 0.9); padding:10px; border-radius:4px;">
+                                ${blocks}
+                            </div>
                         </div>
 
-                        <div style="padding:16px 24px; background:#fff; border-top:1px solid #e2e8f0; flex-shrink:0;">
+                        <div style="padding:20px 30px; background:#faf8f5; border-top:1px solid #d1d5db; text-align:center; flex-shrink:0;">
                             <button onclick="document.getElementById('weekly-news-screen').remove(); updateDashboard(); if(typeof renderNewspaper==='function') renderNewspaper(); window.dispatchEvent(new Event('closeNewsScreen'));"
-                                style="width:100%; padding:14px; background:#0f172a; color:#fff; border:none; border-radius:12px; font-size:14px; font-weight:700; cursor:pointer; transition:background 0.2s;"
-                                onmouseover="this.style.background='#1e293b'" onmouseout="this.style.background='#0f172a'">
-                                確認して次へ進む →
+                                style="min-width:240px; padding:14px 40px; background:#111827; color:#fff; border:1px solid #111827; font-family:'Noto Serif JP',serif; font-size:14px; font-weight:900; cursor:pointer; letter-spacing:2px; transition:all 0.3s;"
+                                onmouseover="this.style.background='#334155'; this.style.transform='translateY(-1px)'" onmouseout="this.style.background='#111827'; this.style.transform='translateY(0)'">
+                                🗞️ 内容を確認して業務に戻る
                             </button>
                         </div>
                     </div>
@@ -2433,6 +2483,7 @@
             if (isGameOver) return;
             week++;
             window._aiTobThisWeek = 0;
+            window._sectorDrifts = {}; // 🌟 セクターごとの連動補正を初期化
             companies.forEach(c => {
                 if (c._payMgmtFee && c.id !== 'player') {
                     let royalty = Math.floor(c.marketCap * 0.002 * 0.20);
@@ -2477,6 +2528,44 @@
             // 財務コスト追跡
             window._pLoanInterest = 0; window._pHQRent = 0; window._pRenovPay = 0; window._pBranchRent = 0; window._pBrokerFee = 0;
             window._pAdSpend = 0; // 広告費追跡
+
+            // 🌟 証券会社特性取得関数（超堅牢版：いかなる引数でもクラッシュを防止）
+            window.getBrokerTraits = function(co) {
+                const _DEFAULT = { weeklyFee: 0.0007, longInt: 0.0008, shortFee: 0.001, fx: { weeklyFeeMult: 1.0 }, traits: [] };
+                if (!co || typeof co !== 'object') return _DEFAULT;
+                // 性格に応じた特性設定（ co が broker でなくても NPC/Player 性格から推測してクラッシュを回避）
+                let base = JSON.parse(JSON.stringify(_DEFAULT));
+                let p = co.personality || 'Balanced';
+                if (p === 'Aggressive') { base.weeklyFee = 0.0005; base.longInt = 0.0006; }
+                else if (p === 'Conservative') { base.weeklyFee = 0.0012; base.longInt = 0.0004; }
+                else if (p === 'Greedy') { base.weeklyFee = 0.0015; base.longInt = 0.0012; }
+                return base;
+            };
+
+            // 🌟 安全なターン実行ラッパー（エラーハンドリングとUIフィードバック）
+            window.safeExecuteTurn = function() {
+                const btn = document.querySelector('.btn-next-turn-fab');
+                if (btn) {
+                    btn.classList.add('processing'); // ローディング状態（CSSで対応）
+                    btn.innerHTML = '<span class="loading-spinner"></span>';
+                }
+                setTimeout(() => {
+                    try {
+                        window.executeTurn();
+                        if (btn) {
+                            btn.classList.remove('processing');
+                            btn.innerHTML = '📅'; // アイコン復旧
+                        }
+                    } catch (e) {
+                        console.error("Turn Execution Error:", e);
+                        if (btn) btn.classList.remove('processing');
+                        alert("⚠️ 翌週への進行中にエラーが発生しました。\n一部のデータが不整合を起こしている可能性があります。\n\n詳細: " + e.message);
+                        if (btn) btn.innerHTML = '⚠️';
+                    }
+                }, 50); // 微小な遅延でUI描画を優先
+            };
+
+
             // IPO審査チェック（毎週）
             if (typeof window.checkIPOCompletion === 'function') window.checkIPOCompletion();
             // ロビー結果チェック（毎週）
@@ -3027,120 +3116,148 @@
                 p._roasterAppealBonus = (rd.id === 'r8') ? 0.05 : (rd.id === 'r10') ? 0.10 : 0;
             })();
 
-            // 💻 デジタルサービス維持費（IT企業へ還流）
-            (function processDigital() {
-                if (!p.digitalOwned) p.digitalOwned = [];
-                let storeCount = Math.max(1, p.stores.length);
-                let itCo = p.contracts ? companies.find(c => c.id === p.contracts.it && !c.isBankrupt) : null;
-                p.digitalOwned.forEach(did => {
-                    let ds = digitalServices.find(d => d.id === did);
-                    if (!ds || ds.weeklyPer === 0) return;
-                    let fee = ds.weeklyPer * storeCount;
-                    p.cash -= fee;
-                    if (itCo) { itCo.cash += fee; itCo.qNet = (itCo.qNet || 0) + fee; itCo.lastRevenue = (itCo.lastRevenue || 0) + fee; itCo.lastExpense = (itCo.lastExpense || 0) + Math.floor(fee * 0.4); itCo.lastProfit = itCo.lastRevenue - itCo.lastExpense; }
-                });
-            })();
+            // 🌐 全コーヒー企業のインフラ経費・サービス維持費処理
+            companies.forEach(c => {
+                if (c.sector !== 'coffee' || c.isBankrupt) return;
+                let isP = (c.id === 'player');
 
-            // 📊 デジタルサービス効果を集計（店舗計算で使用）
-            p._digitalEffects = { missedReduction: 0, satBonus: 0, hrCostReduction: 0, menuStarBonus: 0, satToSaleBonus: 0, trafficBonus: 0, repeatBonus: 0, marginBonus: 0 };
-            (p.digitalOwned || []).forEach(did => {
-                let ds = digitalServices.find(d => d.id === did);
-                if (!ds || !ds.effect) return;
-                if (ds.effect.missedReduction) p._digitalEffects.missedReduction += ds.effect.missedReduction;
-                if (ds.effect.satBonus) p._digitalEffects.satBonus += ds.effect.satBonus;
-                if (ds.effect.hrCostReduction) p._digitalEffects.hrCostReduction += ds.effect.hrCostReduction;
-                if (ds.effect.menuStarBonus) p._digitalEffects.menuStarBonus += ds.effect.menuStarBonus;
-                if (ds.effect.satToSaleBonus) p._digitalEffects.satToSaleBonus += ds.effect.satToSaleBonus;
-                if (ds.effect.trafficBonus) p._digitalEffects.trafficBonus += ds.effect.trafficBonus;
-                if (ds.effect.repeatBonus) p._digitalEffects.repeatBonus += ds.effect.repeatBonus;
-                if (ds.effect.marginBonus) p._digitalEffects.marginBonus += ds.effect.marginBonus;
-            });
-
-            // 🚀 新事業の効果を集計
-            p._bizEffects = { mgrLvSpeed: 0, hireCostDown: 0, devCostDown: 0, sweetStar: 0, rentDown: 0, openSpeedUp: 0, awarenessDecayHalf: false };
-            (p.bizOwned || []).forEach(bid => {
-                let bs = bizServices.find(b => b.id === bid);
-                if (!bs || !bs.effect) return;
-                if (bs.effect.mgrLvSpeed) p._bizEffects.mgrLvSpeed += bs.effect.mgrLvSpeed;
-                if (bs.effect.hireCostDown) p._bizEffects.hireCostDown += bs.effect.hireCostDown;
-                if (bs.effect.devCostDown) p._bizEffects.devCostDown += bs.effect.devCostDown;
-                if (bs.effect.sweetStar) p._bizEffects.sweetStar += bs.effect.sweetStar;
-                if (bs.effect.rentDown) p._bizEffects.rentDown += bs.effect.rentDown;
-                if (bs.effect.openSpeedUp) p._bizEffects.openSpeedUp += bs.effect.openSpeedUp;
-                if (bs.effect.awarenessDecayHalf) p._bizEffects.awarenessDecayHalf = true;
-            });
-
-            // 🚀 新事業維持費・収益（ケータリング/通販は物流企業へ）
-            (function processBiz() {
-                if (!p.bizOwned) p.bizOwned = [];
-                let storeCount = Math.max(1, p.stores.length);
-                let logCo = p.contracts ? companies.find(c => c.id === p.contracts.logistics && !c.isBankrupt) : null;
-                let income = 0;
-                p.bizOwned.forEach(bid => {
-                    let bs = bizServices.find(b => b.id === bid);
-                    if (!bs) return;
-                    // 週次維持費
-                    if (bs.weeklyPer > 0) p.cash -= bs.weeklyPer * storeCount;
-                    // 固定収益
-                    let gross = bs.weeklyFixed + (bs.effect.perStoreIncome || 0) * storeCount;
-                    if (gross > 0) {
-                        // 物流還流
-                        let logFee = Math.floor(gross * (bs.logShare || 0));
-                        if (logCo) { logCo.cash += logFee; logCo.qNet = (logCo.qNet || 0) + logFee; logCo.lastRevenue = (logCo.lastRevenue || 0) + logFee; logCo.lastExpense = (logCo.lastExpense || 0) + Math.floor(logFee * 0.5); logCo.lastProfit = logCo.lastRevenue - logCo.lastExpense; }
-                        income += gross - logFee;
-                    }
-                    // 自社ブランド豆: 知名度自然増加
-                    if (bs.id === 'b7') {
-                        Object.keys(p.brandAwareness || {}).forEach(c => {
-                            p.brandAwareness[c] = Math.min(100, (p.brandAwareness[c] || 0) + 0.5);
-                        });
-                    }
-                });
-                if (income > 0) p.cash += income;
-            })();
-
-            // 🚚 通常のインフラ経費処理（国別対応）
-            if (p.contracts) {
-                const _cMapInfra = { 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' };
-                // 国別IT・物流費用（logByCountry/itByCountry優先、なければglobalを使用）
-                let _infraProcessed = {};
-                p.stores.forEach(st => {
-                    let country = _cMapInfra[st.regionKey] || 'JP';
-                    if (_infraProcessed[country]) return; _infraProcessed[country] = true;
-                    let storesInCountry = p.stores.filter(s => (_cMapInfra[s.regionKey] || 'JP') === country).length;
-                    let _subDisc = (typeof window.getLobbyEffect === 'function' && window.getLobbyEffect('sub')) ? 0.80 : 1.0;
-                    [['logByCountry', 'log', 'logistics'], ['itByCountry', 'it', 'it']].forEach(([byKey, secKey, globalKey]) => {
-                        let coId = (p.contracts[byKey]?.[country]) || p.contracts[globalKey];
-                        let contractor = coId ? companies.find(c => c.id === coId && !c.isBankrupt) : null;
-                        let traits = window.getContractTraits ? window.getContractTraits(contractor) : { cost: 50000 };
-                        let cost = Math.floor(traits.cost * storesInCountry * _subDisc);
-                        if (contractor && cost > 0) {
-                            if (contractor.parent) { contractor.cash += cost; contractor.qNet = (contractor.qNet || 0) + cost; if (contractor.parent === 'player') totalInfraSaved += cost; }
-                            else { p.cash -= cost; contractor.cash += cost; contractor.qNet = (contractor.qNet || 0) + cost; contractor.lastRevenue = (contractor.lastRevenue || 0) + cost; contractor.lastExpense = (contractor.lastExpense || 0) + Math.floor(cost * 0.45); contractor.lastProfit = contractor.lastRevenue - contractor.lastExpense; totalInfraPaid += cost; pExp += cost; }
-                        }
-                    });
-                });
-
-                if (p.contracts.insurance && typeof p.contracts.insurance === 'object') {
-                    p.stores.forEach(st => {
-                        let country = cMap[st.regionKey];
-                        let insurerId = p.contracts.insurance[country];
-                        if (insurerId) {
-                            let contractor = companies.find(c => c.id === insurerId);
-                            if (contractor) {
-                                // 🌟 修正：保険ランクに応じた個別の保険料を支払う
-                                let traits = window.getContractTraits(contractor);
-                                let premium = traits.cost;
-                                if (contractor.parent) { contractor.cash += premium; contractor.qNet = (contractor.qNet || 0) + premium; if (contractor.parent === 'player') totalInfraSaved += premium; }
-                                else { p.cash -= premium; contractor.cash += premium; contractor.qNet = (contractor.qNet || 0) + premium; contractor.lastRevenue = (contractor.lastRevenue || 0) + premium; contractor.lastExpense = (contractor.lastExpense || 0) + Math.floor(premium * 0.6); contractor.lastProfit = contractor.lastRevenue - contractor.lastExpense; totalInfraPaid += premium; pExp += premium; }
-                            }
-                        } else {
-                            // 未加入ペナルティ（保険料より高く設定：¥15万/店）
-                            p.cash -= 150000; totalInfraPaid += 150000; pExp += 150000;
+                // 💻 デジタルサービス維持費
+                if (c.digitalOwned && c.digitalOwned.length > 0) {
+                    let storeCount = Math.max(1, c.stores.length);
+                    let itCo = c.contracts ? companies.find(x => x.id === c.contracts.it && !x.isBankrupt) : null;
+                    c.digitalOwned.forEach(did => {
+                        let ds = digitalServices.find(d => d.id === did);
+                        if (!ds || ds.weeklyPer === 0) return;
+                        let fee = ds.weeklyPer * storeCount;
+                        c.cash -= fee;
+                        if (itCo) {
+                            itCo.cash += fee; itCo.qNet = (itCo.qNet || 0) + fee;
+                            itCo.lastRevenue = (itCo.lastRevenue || 0) + fee;
+                            itCo.lastExpense = (itCo.lastExpense || 0) + Math.floor(fee * 0.4);
+                            itCo.lastProfit = itCo.lastRevenue - itCo.lastExpense;
                         }
                     });
                 }
-            }
+
+                // 🚀 新事業維持費・収益（物流還流）
+                if (c.bizOwned && c.bizOwned.length > 0) {
+                    let storeCount = Math.max(1, c.stores.length);
+                    let logCo = c.contracts ? companies.find(x => x.id === c.contracts.logistics && !x.isBankrupt) : null;
+                    let income = 0;
+                    c.bizOwned.forEach(bid => {
+                        let bs = bizServices.find(b => b.id === bid);
+                        if (!bs) return;
+                        if (bs.weeklyPer > 0) c.cash -= bs.weeklyPer * storeCount;
+                        let gross = bs.weeklyFixed + (bs.effect.perStoreIncome || 0) * storeCount;
+                        if (gross > 0) {
+                            let logFee = Math.floor(gross * (bs.logShare || 0));
+                            if (logCo) {
+                                logCo.cash += logFee; logCo.qNet = (logCo.qNet || 0) + logFee;
+                                logCo.lastRevenue = (logCo.lastRevenue || 0) + logFee;
+                                logCo.lastExpense = (logCo.lastExpense || 0) + Math.floor(logFee * 0.5);
+                                logCo.lastProfit = logCo.lastRevenue - logCo.lastExpense;
+                            }
+                            income += gross - logFee;
+                        }
+                        // 自社ブランド豆: 知名度自然増加
+                        if (bs.id === 'b7' && isP) {
+                            Object.keys(c.brandAwareness || {}).forEach(country => {
+                                c.brandAwareness[country] = Math.min(100, (c.brandAwareness[country] || 0) + 0.5);
+                            });
+                        }
+                    });
+                    if (income > 0) c.cash += income;
+                }
+
+                // 🚚 通常のインフラ経費処理（国別、離脱ロジック注入）
+                if (c.contracts) {
+                    const _cMapI = { 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' };
+                    let _infraProcessed = {};
+                    c.stores.forEach(st => {
+                        let country = _cMapI[st.regionKey] || 'JP';
+                        if (_infraProcessed[country]) return; _infraProcessed[country] = true;
+                        let storesInCountry = c.stores.filter(s => (_cMapI[s.regionKey] || 'JP') === country).length;
+                        let _subDisc = (isP && typeof window.getLobbyEffect === 'function' && window.getLobbyEffect('sub')) ? 0.80 : 1.0;
+
+                        // 物流・IT
+                        [['logByCountry', 'log', 'logistics'], ['itByCountry', 'it', 'it']].forEach(([byKey, secKey, globalKey]) => {
+                            let coId = (c.contracts[byKey]?.[country]) || c.contracts[globalKey];
+                            let contractor = coId ? companies.find(x => x.id === coId && !x.isBankrupt) : null;
+                            
+                            // 🌟 AIの解約（離脱）チェック: プレイヤーの子会社が高額すぎる場合
+                            if (!isP && contractor && contractor.parent === 'player') {
+                                let pm = contractor.servicePriceMult || 1.0;
+                                if (pm > 3.0) {
+                                    let churnProb = pm > 5.0 ? 1.0 : 0.3; // 5倍超なら即解約、3倍超なら30%で解約
+                                    if (Math.random() < churnProb) {
+                                        if (byKey === 'logByCountry') delete c.contracts.logByCountry[country];
+                                        else if (byKey === 'itByCountry') delete c.contracts.itByCountry[country];
+                                        addLog(`【解約】${c.name.replace(/\[.*?\]\s*/g,'')} はサービス料が高額すぎるため、${contractor.name.replace(/\[.*?\]\s*/g,'')} との契約を解除しました。`, 'warning', '経済');
+                                        contractor = null; coId = null;
+                                    }
+                                }
+                            }
+
+                            let traits = window.getContractTraits ? window.getContractTraits(contractor) : { cost: 50000 };
+                            let cost = Math.floor(traits.cost * storesInCountry * _subDisc);
+                            if (contractor && cost > 0) {
+                                if (contractor.parent === c.id) { // 自社内製
+                                    contractor.cash += cost; contractor.qNet = (contractor.qNet || 0) + cost; 
+                                    if (isP) totalInfraSaved += cost;
+                                } else {
+                                    c.cash -= cost; contractor.cash += cost; contractor.qNet = (contractor.qNet || 0) + cost;
+                                    contractor.lastRevenue = (contractor.lastRevenue || 0) + cost;
+                                    contractor.lastExpense = (contractor.lastExpense || 0) + Math.floor(cost * 0.45);
+                                    contractor.lastProfit = contractor.lastRevenue - contractor.lastExpense;
+                                    if (isP) { totalInfraPaid += cost; pExp += cost; }
+                                }
+                            } else if (!contractor) {
+                                // 未契約ペナルティ
+                                let penalty = 100000 * storesInCountry;
+                                c.cash -= penalty;
+                                if (isP) { totalInfraPaid += penalty; pExp += penalty; }
+                            }
+                        });
+
+                        // 保険
+                        let insurerId = c.contracts.insurance ? c.contracts.insurance[country] : null;
+                        let insurer = insurerId ? companies.find(x => x.id === insurerId && !x.isBankrupt) : null;
+                        
+                        // 🌟 保険の解約チェック
+                        if (!isP && insurer && insurer.parent === 'player') {
+                            let pm = insurer.servicePriceMult || 1.0;
+                            if (pm > 3.0) {
+                                let churnProb = pm > 5.0 ? 1.0 : 0.3;
+                                if (Math.random() < churnProb) {
+                                    delete c.contracts.insurance[country];
+                                    addLog(`【解約】${c.name.replace(/\[.*?\]\s*/g,'')} は保険料が高額すぎるため、${insurer.name.replace(/\[.*?\]\s*/g,'')} との保険契約を解除しました。`, 'warning', '経済');
+                                    insurer = null;
+                                }
+                            }
+                        }
+
+                        if (insurer) {
+                            let traits = window.getContractTraits(insurer);
+                            let premium = traits.cost * storesInCountry;
+                            if (insurer.parent === c.id) {
+                                insurer.cash += premium; insurer.qNet = (insurer.qNet || 0) + premium;
+                                if (isP) totalInfraSaved += premium;
+                            } else {
+                                c.cash -= premium; insurer.cash += premium; insurer.qNet = (insurer.qNet || 0) + premium;
+                                insurer.lastRevenue = (insurer.lastRevenue || 0) + premium;
+                                insurer.lastExpense = (insurer.lastExpense || 0) + Math.floor(premium * 0.6);
+                                insurer.lastProfit = insurer.lastRevenue - insurer.lastExpense;
+                                if (isP) { totalInfraPaid += premium; pExp += premium; }
+                            }
+                        } else {
+                            // 未加入ペナルティ
+                            let penalty = 150000 * storesInCountry;
+                            c.cash -= penalty;
+                            if (isP) { totalInfraPaid += penalty; pExp += penalty; }
+                        }
+                    });
+                }
+            });
 
             let totalInterest = 0;
             companies.forEach(c => {
@@ -3646,7 +3763,7 @@
                     let _bt = window.getBrokerTraits(c);
                     if (_bt) {
                         let _weeklyRate = _bt.weeklyFee * (_bt.fx.weeklyFeeMult || 1.0);
-                        let _brokerFee = Math.floor((c.marketCap || 0) * _weeklyRate);
+                        let _brokerFee = Math.floor((c.lastRevenue || 0) * 0.01);
                         if (isNaN(_brokerFee)) _brokerFee = 0;
                         // AI企業は手数料が週次利益の30%を超えないようにキャップ
                         if (c.id !== 'player' && c.lastRevenue > 0) {
@@ -4386,7 +4503,42 @@
                             c.lastProfit = c.lastRevenue - (c.lastExpense || 0);
                         }
                     }
+                    // 🌟 AI企業の証券会社割り当て（未設定の場合）
+                    if (!c.brokerCoId) {
+                        let brokers = companies.filter(cx => cx.sector === 'sogo' && !cx.isBankrupt);
+                        if (brokers.length > 0) {
+                            // 大手・標準・格安の順に優先、またはランダム
+                            c.brokerCoId = brokers[Math.floor(Math.random() * Math.min(3, brokers.length))].id;
+                        }
+                    }
+                    if (!c._marginShorts) c._marginShorts = {};
+                    if (!c._marginLongs) c._marginLongs = {};
+
+                    // 🌟 AI投資戦略：毎週2%の確率で新規信用ポジション（買い/売り）を構築
+                    if (c.id !== 'player' && !c.isBankrupt && c.brokerCoId && Math.random() < 0.02) {
+                        // 1. ターゲット企業の選定
+                        let available = companies.filter(cx => cx.id !== c.id && cx.isPublic && !cx.isBankrupt && cx._ohlcv);
+                        if (available.length > 0) {
+                            let target = available[Math.floor(Math.random() * available.length)];
+                            let trend = target._ohlcv.length > 5 ? (target.stockPrice - target._ohlcv[target._ohlcv.length-5].c) / target._ohlcv[target._ohlcv.length-5].c : 0;
+                            
+                            // 性格とトレンドに基づいた判断
+                            let amount = Math.floor(c.cash * 0.2 / target.stockPrice); // 資金の20%分を証拠金として活用
+                            if (amount > 0) {
+                                if (trend > 0.05 || (c.personality === 'Greedy' && Math.random() > 0.5)) {
+                                    // 信用買い
+                                    performStockTrade(c.id, target.id, amount, 'marginlong', target.stockPrice);
+                                } else if (trend < -0.05 || (c.personality === 'Conservative' && Math.random() > 0.7)) {
+                                    // 空売り
+                                    performStockTrade(c.id, target.id, amount, 'marginshort', target.stockPrice);
+                                }
+                            }
+                        }
+                    }
                 }
+
+                if (c.id === 'player') window._pMarginTotalCost = 0; // 金利コスト集計リセット
+
 
                 let commonExp = Math.floor(c.debt * (c.id === 'player' && cfo ? 0.008 : 0.01));
                 if (c.id === 'player') {
@@ -4405,6 +4557,38 @@
                     pExp += commonExp;
                 }
                 prof -= commonExp;
+
+                // 🌟 信用取引の金利・貸株料の計算 (毎週発生)
+                let _marginCost = 0;
+                let _brokerCo = (c.brokerCoId && typeof companies !== 'undefined') ? companies.find(cx => cx.id === c.brokerCoId) : null;
+                // 安全策：getBrokerTraitsがnullを返す、または未定義の場合のフォールバック
+                let _bt = (_brokerCo && typeof window.getBrokerTraits === 'function') ? (window.getBrokerTraits(_brokerCo) || { longInt: 0.0008, shortFee: 0.001 }) : { longInt: 0.0008, shortFee: 0.001 };
+                
+                // 買い金利
+                if (c._marginLongs) {
+                    for (let tid in c._marginLongs) {
+                        let pos = c._marginLongs[tid];
+                        let mcost = Math.floor(pos.count * pos.avgPrice * (_bt.longInt || 0.0008));
+                        _marginCost += mcost;
+                        if (c.id === 'player') window._pMarginTotalCost = (window._pMarginTotalCost || 0) + mcost;
+                    }
+                }
+                // 貸株料 (売り)
+                if (c._marginShorts) {
+                    for (let tid in c._marginShorts) {
+                        let pos = c._marginShorts[tid];
+                        let mcost = Math.floor(pos.count * pos.avgPrice * (_bt.shortFee || 0.001));
+                        _marginCost += mcost;
+                        if (c.id === 'player') window._pMarginTotalCost = (window._pMarginTotalCost || 0) + mcost;
+                    }
+                }
+                if (_marginCost > 0) {
+                    prof -= _marginCost;
+                    if (_brokerCo) {
+                        _brokerCo.cash += _marginCost;
+                        _brokerCo.lastRevenue = (_brokerCo.lastRevenue || 0) + _marginCost;
+                    }
+                }
 
                 // 🌟 修正：「上納金バグ（1000億消失）」の完全対策
                 // 過去の累積(qNet)から引くのではなく、今週の利益(prof)から直接天引きして送る
@@ -4481,6 +4665,12 @@
                     let drift = _econDrift * (0.5 + Math.random());
                     c.stockPrice = Math.max(10, Math.floor(c.stockPrice * (1 + drift)));
                 }
+                // 🌟 セクター連動補正の適用
+                let sDrift = window._sectorDrifts[c.sector] || 0;
+                if (sDrift !== 0) {
+                    let sModifier = sDrift * (0.7 + Math.random() * 0.6); // 企業ごとのバラツキ
+                    c.stockPrice = Math.max(10, Math.floor(c.stockPrice * (1 + sModifier)));
+                }
 
                 // 🛑 ストップ高・ストップ安の判定 (週次変動 ±20%制限)
                 c.isLimitUp = false;
@@ -4511,6 +4701,68 @@
                     if (week % 4 === 0) addLog(`【株式分割】${c.name.replace(/\[.*?\]\s*/, '')} が株式${splitRatio}分割を実施。株価: ¥${c.stockPrice.toLocaleString()}`, 'normal', '市場');
                 }
 
+                // 🌟 信用取引（空売り・信用買い）の週次管理ロジック（プレイヤー＆AI共通）
+                if (c._marginShorts || c._marginLongs) {
+                    let broker = c.brokerCoId ? companies.find(cx => cx.id === c.brokerCoId) : null;
+                    
+                    // 1. 空売り（ショート）の維持管理
+                    if (c._marginShorts) {
+                        Object.keys(c._marginShorts).forEach(sid => {
+                            let pos = c._marginShorts[sid];
+                            let targetCo = companies.find(cx => cx.id === sid);
+                            if (!targetCo || targetCo.isBankrupt) {
+                                // 倒産時の利益確定
+                                let profit = pos.avgPrice * pos.count;
+                                c.cash += (pos.margin + profit);
+                                delete c._marginShorts[sid];
+                                return;
+                            }
+                            // 貸株料の徴収（週次 0.1%）
+                            let loanFee = Math.floor(pos.avgPrice * pos.count * 0.001);
+                            c.cash -= loanFee;
+                            if (c.id === 'player') window._pMarginTotalCost += loanFee;
+                            if (broker) { broker.cash += loanFee; broker.lastRevenue += loanFee; }
+
+                            // ロスカット判定（維持率80%割れ）
+                            let loss = (targetCo.stockPrice - pos.avgPrice) * pos.count;
+                            if (loss > pos.margin * 0.8) {
+                                let penalty = Math.floor(targetCo.stockPrice * pos.count * 0.005);
+                                c.cash += (pos.margin - loss - penalty);
+                                if (broker) { broker.cash += penalty; broker.lastRevenue += penalty; }
+                                delete c._marginShorts[sid];
+                                if (c.id === 'player') addLog(`【ロスカット】${targetCo.name.replace(/\[.*?\]\s*/,'')} の空売りが強制決済されました。`, 'alert', '自社');
+                            }
+                        });
+                    }
+
+                    // 2. 信用買い（ロング）の維持管理
+                    if (c._marginLongs) {
+                        Object.keys(c._marginLongs).forEach(sid => {
+                            let pos = c._marginLongs[sid];
+                            let targetCo = companies.find(cx => cx.id === sid);
+                            if (!targetCo || targetCo.isBankrupt) {
+                                delete c._marginLongs[sid]; // 価値ゼロで消滅
+                                return;
+                            }
+                            // 買い方金利の徴収（週次 0.08%）
+                            let longInt = Math.floor(pos.avgPrice * pos.count * 0.0008);
+                            c.cash -= longInt;
+                            if (c.id === 'player') window._pMarginTotalCost += longInt;
+                            if (broker) { broker.cash += longInt; broker.lastRevenue += longInt; }
+
+                            // ロスカット判定
+                            let loss = (pos.avgPrice - targetCo.stockPrice) * pos.count;
+                            if (loss > pos.margin * 0.8) {
+                                let penalty = Math.floor(targetCo.stockPrice * pos.count * 0.005);
+                                c.cash += (pos.margin - loss - penalty);
+                                if (broker) { broker.cash += penalty; broker.lastRevenue += penalty; }
+                                delete c._marginLongs[sid];
+                                if (c.id === 'player') addLog(`【ロスカット】${targetCo.name.replace(/\[.*?\]\s*/,'')} の信用買いが強制決済されました。`, 'alert', '自社');
+                            }
+                        });
+                    }
+                }
+                
                 if (!stockHistory.datasets[c.id]) stockHistory.datasets[c.id] = []; stockHistory.datasets[c.id].push(c.stockPrice); if (stockHistory.datasets[c.id].length > 20) stockHistory.datasets[c.id].shift();
 
                 // ── M&A・証券 2.0: OHLCV データの保存 ──
@@ -4784,6 +5036,63 @@
                     if (!c._profHist) c._profHist = [];
                     c._profHist.push(prof);
                     if (c._profHist.length > 8) c._profHist.shift();
+
+                    // 🌟 AIマーケット・トレーディング (ポートフォリオ運用)
+                    if (c.cash > 50000000 && Math.random() < 0.15) {
+                        let tradeTarget = companies[Math.floor(Math.random() * companies.length)];
+                        if (tradeTarget && tradeTarget.id !== c.id && !tradeTarget.isBankrupt && tradeTarget.isPublic) {
+                            // スコア簡易計算
+                            let netAssets_t = tradeTarget.cash + Object.values(tradeTarget.deposits || {}).reduce((s, v) => s + v, 0) - (tradeTarget.debt || 0);
+                            let pbr_t = tradeTarget.marketCap / Math.max(1, netAssets_t);
+                            let roe_t = netAssets_t > 0 ? ((tradeTarget.lastQProfit || 0) * 4 / netAssets_t * 100) : 0;
+                            
+                            // 買い判断
+                            if ((pbr_t < 0.8 || roe_t > 15) && c.cash > tradeTarget.stockPrice * 1000) {
+                                let buyAmount = Math.floor(tradeTarget.shares * 0.002); // 0.2% ずつ
+                                let cost = buyAmount * tradeTarget.stockPrice;
+                                if (c.cash >= cost && (tradeTarget.shareholders[c.id] || 0) < tradeTarget.shares * 0.1) {
+                                    c.cash -= cost;
+                                    tradeTarget.shareholders[c.id] = (tradeTarget.shareholders[c.id] || 0) + buyAmount;
+                                }
+                            }
+                            
+                            // 売り判断 (利益確定・損切り)
+                            let currentOwned = tradeTarget.shareholders[c.id] || 0;
+                            if (currentOwned > 0 && (pbr_t > 3.0 || roe_t < 2)) {
+                                let sellAmount = Math.floor(currentOwned * 0.5);
+                                tradeTarget.shareholders[c.id] -= sellAmount;
+                                c.cash += sellAmount * tradeTarget.stockPrice;
+                            }
+
+                            // 🌟 AIによる空売り (性格がGreedy かつ 格付けDの場合)
+                            if (c.personality === 'Greedy' && netAssets_t < -10000000 && pbr_t > 5.0 && Math.random() < 0.05) {
+                                if (!c._aiShorts) c._aiShorts = {};
+                                if (!c._aiShorts[tradeTarget.id]) {
+                                    let shortAmount = Math.floor(tradeTarget.shares * 0.001); // 0.1% 
+                                    let margin = Math.floor(shortAmount * tradeTarget.stockPrice * 0.5);
+                                    if (c.cash >= margin) {
+                                        c.cash -= margin;
+                                        c._aiShorts[tradeTarget.id] = { shares: shortAmount, avgPrice: tradeTarget.stockPrice, margin: margin };
+                                        if (week % 4 === 0) addLog(`【AI空売り】${c.name.replace(/\[.*?\]\s*/, '')} が ${tradeTarget.name.replace(/\[.*?\]\s*/, '')} を空売りしました。`, 'warning', '市場');
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // AI空売りの週次評価とロスカット
+                    if (c._aiShorts) {
+                        for (let sid in c._aiShorts) {
+                            let pos = c._aiShorts[sid];
+                            let t = companies.find(cx => cx.id === sid);
+                            if (!t || t.isBankrupt || t.stockPrice > pos.avgPrice * 1.5) {
+                                // 買戻し (損切り or 倒産利益確定)
+                                let profit = (pos.avgPrice - (t?t.stockPrice:0)) * pos.shares;
+                                c.cash += pos.margin + profit;
+                                delete c._aiShorts[sid];
+                            }
+                        }
+                    }
                 }
 
                 // ── AI: 利益停滞 → 同業M&A ──
@@ -4794,20 +5103,43 @@
                         // 4週連続で成長ゼロかマイナス
                         let stagnant = recent4.every((v, i) => i === 0 || v <= recent4[i - 1] * 1.02);
                         if (stagnant && !c._maTarget && c.cash > 100000000 && Math.random() < 0.25) {
-                            // 同セクターで買収可能な企業を探す
+                            // 🌟 AI投資評価エンジン: 買収ターゲットの戦略的選定
                             let candidates = companies.filter(cx =>
                                 cx.sector === c.sector && cx.id !== c.id &&
-                                cx.isPublic && // 非上場は対象外
-                                !cx.isBankrupt && cx.parent !== c.id &&
-                                cx.marketCap <= c.cash * 1.8 &&
-                                cx.marketCap > 0 &&
-                                !(cx._protectedUntil && week < cx._protectedUntil) // 保護期間中は除外
-                            );
-                            if (candidates.length > 0) {
-                                let tgt = candidates[Math.floor(Math.random() * candidates.length)];
+                                cx.isPublic && !cx.isBankrupt && cx.parent !== c.id &&
+                                cx.marketCap <= c.cash * 1.8 && cx.marketCap > 0 &&
+                                !(cx._protectedUntil && week < cx._protectedUntil)
+                            ).map(cx => {
+                                // 割安性 (PBR)
+                                let totalDep = Object.values(cx.deposits || {}).reduce((s, v) => s + v, 0);
+                                let totalDebt = Object.values(cx.bankDebts || {}).reduce((s, v) => s + v, 0) + (cx.debt || 0);
+                                let netAssets = cx.cash + totalDep - totalDebt;
+                                let pbr = cx.marketCap / Math.max(1, netAssets);
+                                
+                                // 収益性 (ROE)
+                                let roe = netAssets > 0 ? ((cx.lastQProfit || 0) * 4 / netAssets * 100) : 0;
+                                
+                                // スコア計算
+                                let score = 50; 
+                                if (pbr < 1.0) score += 30; // バリュー投資
+                                if (roe > 15) score += 20;  // 成長・クオリティ投資
+                                if (window._sectorDrifts[cx.sector] > 0) score += 20; // トレンドフォロー
+                                
+                                // 格付け補正 (簡易)
+                                if (netAssets < 0) score -= 40; // 債務超過は敬遠
+                                
+                                // AIの性格による重み付け
+                                if (c.personality === 'Conservative') score += (pbr < 0.8 ? 20 : 0);
+                                if (c.personality === 'Greedy') score += (roe > 20 ? 20 : 0);
+                                
+                                return { co: cx, score: score + (Math.random() * 20) };
+                            }).sort((a, b) => b.score - a.score);
+
+                            if (candidates.length > 0 && candidates[0].score > 60) {
+                                let tgt = candidates[0].co;
                                 c._maTarget = tgt.id;
                                 c._maWeek = week;
-                                addLog(`【M&A検討】${c.name.replace(/\[.*?\]\s*/, '')} が成長強化のため ${tgt.name.replace(/\[.*?\]\s*/, '')} への買収を検討開始。`, 'news', '競合');
+                                addLog(`【M&A検討】${c.name.replace(/\[.*?\]\s*/, '')} が割安性・収益性を考慮し ${tgt.name.replace(/\[.*?\]\s*/, '')} への買収を検討開始。`, 'news', '競合');
                             }
                         }
                     }
@@ -9816,47 +10148,43 @@ ${ds.desc}`)) {
                 </div>
                 </div>
                 <div style="display:${window._finTab === 'broker' ? 'block' : 'none'}">
-                <h3 style="margin-top:20px; border-bottom:2px solid var(--border); padding-bottom:10px;">📊 証券口座</h3>
-                ${(() => {
-                    let _p = companies[0];
-                    let _currentBroker = _p.brokerCoId ? companies.find(b => b.id === _p.brokerCoId && !b.isBankrupt) : null;
-                    let _brokers = companies.filter(b => b.sector === 'sogo' && !b.isBankrupt && (b.country === _p.country || !b.country));
-                    if (_brokers.length === 0) _brokers = companies.filter(b => b.sector === 'sogo' && !b.isBankrupt);
-                    let _bt = _currentBroker ? window.getBrokerTraits(_p) : null;
-                    let _currentHtml = _currentBroker ? `
-                        <div class="card" style="border-left:6px solid var(--primary);background:#f9fafb;margin-bottom:16px;">
-                            <div style="font-size:11px;color:var(--primary);font-weight:700;">現在の登録証券会社</div>
-                            <div style="font-size:18px;font-weight:900;margin:6px 0;">${_currentBroker.name.replace(/\[.*?\]\s*/g, '')}</div>
-                            <div style="font-size:12px;color:var(--text-mut);margin-bottom:8px;">
-                                週次手数料: 時価総額×${((_bt?.weeklyFee || 0.001) * 100).toFixed(2)}%${_bt?.fx?.weeklyFeeMult ? ' (割引適用中)' : ''} | TOB手数料: ${Math.round((_bt?.tobFee || 0.10) * (_bt?.fx?.tobFeeMult || 1) * 100)}%
+                <div class="card" style="background:var(--bg); border:none;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                        <h3 style="margin:0;">🏦 契約証券会社</h3>
+                        <button class="btn-outline" onclick="openBrokerSelectModal()" style="font-size:12px; padding:6px 12px;">証券会社を変更</button>
+                    </div>
+                    
+                    <div class="grid-2" style="margin-bottom:20px;">
+                        <div class="stat-box" style="background:#f8fafc;">
+                            <div class="label">利用中の証券会社</div>
+                            <div class="value" style="font-size:1.4em;">${p.brokerCoId ? companies.find(c => c.id === p.brokerCoId)?.name.replace(/\[.*?\]\s*/,'') : '未契約'}</div>
+                        </div>
+                        <div class="stat-box" style="background:#fff7ed;">
+                            <div class="label">今週の信用コスト（利息・貸借料）</div>
+                            <div class="value text-danger" style="font-size:1.4em;">¥${(window._pMarginTotalCost || 0).toLocaleString()}</div>
+                        </div>
+                    </div>
+
+                    <div style="background:#f1f5f9; border-radius:12px; padding:15px; font-size:13px; color:var(--text-mut); margin-bottom:20px;">
+                        <div style="font-weight:900; color:var(--text-main); margin-bottom:4px;">💡 証券会社を所有するメリット</div>
+                        自分が証券会社（総合商社）オーナーの場合、自分や他社が支払う取引手数料や金利が<b>「収益（売上）」</b>として自社に還流します。自分自身が信用取引を多用する場合、証券会社の買収は強力なコスト削減策となります。
+                    </div>
+
+                    <div style="font-size:13px; font-weight:900; color:var(--text-mut); margin-bottom:10px;">現在のプラン詳細</div>
+                    ${(() => {
+                        let _bt = window.getBrokerTraits(p);
+                        return `
+                        <div class="card" style="border-left:4px solid var(--primary); padding:12px; background:#f9fafb;">
+                            <div style="font-size:11px; color:var(--text-mut);">週次管理費: ${((_bt.weeklyFee || 0.001)*100).toFixed(2)}% | TOB手数料: ${Math.round((_bt.tobFee || 0.1)*100)}%</div>
+                            <div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:8px;">
+                                ${(_bt.traits || []).map(tid => {
+                                    let def = brokerTraitDefs.find(d => d.id === tid);
+                                    return def ? `<span style="background:#eff6ff; color:var(--primary); padding:2px 8px; border-radius:10px; font-size:9px; font-weight:700;">${def.icon} ${def.name}</span>` : '';
+                                }).join('') || '<span style="font-size:9px; color:#94a3b8;">特典なし</span>'}
                             </div>
-                            ${_bt && _bt.traits.length > 0 ? `<div style="display:flex;flex-wrap:wrap;gap:6px;">` +
-                            _bt.traits.map(tid => { let def = brokerTraitDefs.find(d => d.id === tid); return def ? `<span style="background:#eff6ff;color:var(--primary);padding:3px 10px;border-radius:20px;font-size:10px;font-weight:700;">${def.icon} ${def.name}</span>` : ''; }).join('') +
-                            `</div>` : '<div style="font-size:11px;color:#94a3b8;">特典なし</div>'}
-                        </div>` : '<div class="card" style="text-align:center;padding:20px;color:var(--text-mut);">証券口座が未登録です。以下から選択してください。</div>';
-                    let _listHtml = _brokers.map(b => {
-                        let _r = b.id.endsWith('_0') ? 0 : b.id.endsWith('_1') ? 1 : 2;
-                        let _fee = (_r === 0 ? 0.12 : _r === 1 ? 0.10 : 0.07);
-                        let _traits = b._brokerTraits || [];
-                        let _isSelected = _p.brokerCoId === b.id;
-                        return `<div class="card" style="margin-bottom:8px;border:2px solid ${_isSelected ? 'var(--primary)' : 'var(--border)'};padding:12px;">
-                            <div class="flex-between">
-                                <div>
-                                    <span style="font-weight:900;font-size:14px;">${b.name.replace(/\[.*?\]\s*/g, '')}</span>
-                                    <span style="font-size:10px;padding:2px 8px;border-radius:10px;margin-left:6px;background:${_r === 0 ? '#fef3c7;color:#92400e' : _r === 1 ? '#f1f5f9;color:#64748b' : '#d1fae5;color:#065f46'};font-weight:700;">${_r === 0 ? '👑大手' : _r === 1 ? '標準' : '💸格安'}</span>
-                                </div>
-                                <span style="font-size:12px;font-weight:700;color:var(--danger);">週${_fee}%</span>
-                            </div>
-                            <div style="font-size:11px;color:#64748b;margin:6px 0;">TOB手数料: 10%${_traits.some(t => t === 'tobDisc') ? '→5%' : ''}</div>
-                            <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">
-                                ${_traits.map(tid => { let def = brokerTraitDefs.find(d => d.id === tid); return def ? `<span style="background:#eff6ff;color:var(--primary);padding:2px 8px;border-radius:10px;font-size:9px;font-weight:700;">${def.icon} ${def.name}</span>` : ''; }).join('') || '<span style="font-size:9px;color:#94a3b8;">特典なし</span>'}
-                            </div>
-                            ${_isSelected ? '<div style="text-align:center;font-size:11px;color:var(--primary);font-weight:900;">✅ 登録中</div>'
-                                : `<button onclick="companies[0].brokerCoId='${b.id}';addLog('【証券口座】${b.name.replace(/\[.*?\]\s*/g, '').replace(/'/g, '')} に口座を開設。','success','自社');renderPortfolio();" class="btn-primary" style="width:100%;padding:8px;font-size:11px;">この証券会社に登録</button>`}
                         </div>`;
-                    }).join('');
-                    return _currentHtml + '<div style="font-size:13px;font-weight:700;color:var(--text-mut);margin:16px 0 8px;">証券会社一覧（自国）</div>' + _listHtml;
-                })()}
+                    })()}
+                </div>
                 </div>
                 <div style="display:${window._finTab === 'policy' ? 'block' : 'none'}">
                 <h3>⚙️ アクション</h3>
@@ -9964,8 +10292,102 @@ ${ds.desc}`)) {
                         <div class="stat-box"><div class="label">累計 受取配当金</div><div class="value text-success">¥${playerTotalDividends.toLocaleString()}</div></div>
                     </div>
                 </div>
-                <h3>🏢 所有ビル一覧</h3>
-                <div id="owned-props-grid" class="grid-3"></div>
+
+                <style>
+                    .pf-section { margin-top: 24px; }
+                    .pf-title { font-size:18px; font-weight:900; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+                    .pf-table { width:100%; border-collapse:collapse; background:#fff; border-radius:12px; overflow:hidden; border:1px solid var(--border); }
+                    .pf-table th { background:#f8fafc; padding:12px; font-size:11px; color:var(--text-mut); text-align:left; border-bottom:1px solid var(--border); }
+                    .pf-table td { padding:14px 12px; border-bottom:1px solid #f1f5f9; font-size:13px; }
+                    .tag-spot { background:#dcfce7; color:#166534; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold; }
+                    .tag-long { background:#dbeafe; color:#1e40af; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold; }
+                    .tag-short { background:#fee2e2; color:#991b1b; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold; }
+                    .m-gauge { height:4px; background:#e2e8f0; border-radius:2px; margin-top:4px; position:relative; overflow:hidden; }
+                    .m-fill { height:100%; background:var(--primary); transition:width 0.3s; }
+                </style>
+
+                <div class="pf-section">
+                    <div class="pf-title">📈 証券ポートフォリオ</div>
+                    <table class="pf-table">
+                        <thead>
+                            <tr>
+                                <th>銘柄 / 区分</th>
+                                <th>数量 / 取得単価</th>
+                                <th>現在値</th>
+                                <th>評価損益</th>
+                                <th>証拠金 / 維持率</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${(function() {
+                                let rows = '';
+                                companies.forEach(c => {
+                                    if (c.id === 'player') return;
+
+                                    // 1. 現物
+                                    let spotCount = p.shareholders[c.id] || 0;
+                                    if (spotCount > 0) {
+                                        let avg = (p._spotAvgPrices || {})[c.id] || 0;
+                                        let pl = avg > 0 ? (c.stockPrice - avg) * spotCount : 0;
+                                        rows += `<tr>
+                                            <td><div style="font-weight:900;">${c.name.replace(/\[.*?\]\s*/,'')}</div><span class="tag-spot">現物</span></td>
+                                            <td>${spotCount.toLocaleString()} 株<br><span style="font-size:11px;color:var(--text-mut);">¥${avg > 0 ? avg.toLocaleString() : '---'}</span></td>
+                                            <td>¥${c.stockPrice.toLocaleString()}</td>
+                                            <td style="color:${pl >= 0 ? 'var(--success)' : 'var(--danger)'}; font-weight:bold;">${pl >= 0 ? '+' : ''}${pl.toLocaleString()}</td>
+                                            <td style="color:var(--text-mut);">---</td>
+                                        </tr>`;
+                                    }
+
+                                    // 2. 信用買い
+                                    if (p._marginLongs && p._marginLongs[c.id]) {
+                                        let pos = p._marginLongs[c.id];
+                                        let pl = (c.stockPrice - pos.avgPrice) * pos.count;
+                                        let loss = Math.max(0, -pl);
+                                        let mRatio = Math.max(0, 100 - (loss / (pos.margin * 0.8) * 100));
+                                        let rColor = mRatio < 20 ? 'var(--danger)' : (mRatio < 50 ? 'var(--warning)' : 'var(--success)');
+                                        rows += `<tr>
+                                            <td><div style="font-weight:900;">${c.name.replace(/\[.*?\]\s*/,'')}</div><span class="tag-long">信用買い</span></td>
+                                            <td>${pos.count.toLocaleString()} 株<br><span style="font-size:11px;color:var(--text-mut);">¥${pos.avgPrice.toLocaleString()}</span></td>
+                                            <td>¥${c.stockPrice.toLocaleString()}</td>
+                                            <td style="color:${pl >= 0 ? 'var(--success)' : 'var(--danger)'}; font-weight:bold;">${pl >= 0 ? '+' : ''}${pl.toLocaleString()}</td>
+                                            <td style="font-size:11px;">
+                                                ¥${pos.margin.toLocaleString()}<br>
+                                                <div style="display:flex; justify-content:space-between; margin-top:4px;"><span>余力</span><span style="color:${rColor}; font-weight:bold;">${mRatio.toFixed(0)}%</span></div>
+                                                <div class="m-gauge"><div class="m-fill" style="width:${mRatio}%; background:${rColor};"></div></div>
+                                            </td>
+                                        </tr>`;
+                                    }
+
+                                    // 3. 空売り
+                                    if (p._marginShorts && p._marginShorts[c.id]) {
+                                        let pos = p._marginShorts[c.id];
+                                        let pl = (pos.avgPrice - c.stockPrice) * pos.count;
+                                        let loss = Math.max(0, -pl);
+                                        let mRatio = Math.max(0, 100 - (loss / (pos.margin * 0.8) * 100));
+                                        let rColor = mRatio < 20 ? 'var(--danger)' : (mRatio < 50 ? 'var(--warning)' : 'var(--success)');
+                                        rows += `<tr>
+                                            <td><div style="font-weight:900;">${c.name.replace(/\[.*?\]\s*/,'')}</div><span class="tag-short">空売り</span></td>
+                                            <td>${pos.count.toLocaleString()} 株<br><span style="font-size:11px;color:var(--text-mut);">¥${pos.avgPrice.toLocaleString()}</span></td>
+                                            <td>¥${c.stockPrice.toLocaleString()}</td>
+                                            <td style="color:${pl >= 0 ? 'var(--success)' : 'var(--danger)'}; font-weight:bold;">${pl >= 0 ? '+' : ''}${pl.toLocaleString()}</td>
+                                            <td style="font-size:11px;">
+                                                ¥${pos.margin.toLocaleString()}<br>
+                                                <div style="display:flex; justify-content:space-between; margin-top:4px;"><span>余力</span><span style="color:${rColor}; font-weight:bold;">${mRatio.toFixed(0)}%</span></div>
+                                                <div class="m-gauge"><div class="m-fill" style="width:${mRatio}%; background:${rColor};"></div></div>
+                                            </td>
+                                        </tr>`;
+                                    }
+                                });
+                                return rows || '<tr><td colspan="5" style="text-align:center; padding:30px; color:var(--text-mut);">現在、保有している銘柄はありません。</td></tr>';
+                            })()}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="pf-section">
+                    <div class="pf-title">🏢 所有ビル一覧</div>
+                    <div id="owned-props-grid" class="grid-3"></div>
+                </div>
                 </div>
             `;
             setTimeout(updateBankUI, 10);
@@ -11026,11 +11448,17 @@ ${ds.desc}`)) {
                                 <div style="font-size:12px;font-weight:900;color:${priceColor};">${sign}¥${Math.abs(diff).toLocaleString()} (${sign}${diffPct.toFixed(2)}%)</div>
                             </div>
                         </div>
-                        <div style="display:flex; gap:12px; margin-top:8px;">
+                        <div class="market-chart-row">
                             <div style="flex:1; position:relative;">
-                                <div style="height:210px; width:100%; position:relative; background:#0f172a; border:1px solid #334155; border-radius:4px;"><canvas id="market-candle-chart"></canvas></div>
+                                <div style="position:relative; height:210px; width:100%; background:#0f172a; border:1px solid #334155; border-radius:4px;">
+                                    <canvas id="market-candle-chart"></canvas>
+                                    <div style="position:absolute;top:6px;right:6px;display:flex;gap:3px;z-index:10;">
+                                        <button id="chart-mode-candle" onclick="window._chartMode='candle'; window._redrawMarketChart()" style="font-size:9px;font-weight:900;padding:2px 7px;border-radius:4px;border:1px solid #334155;background:#0284c7;color:#fff;cursor:pointer;">ローソク</button>
+                                        <button id="chart-mode-line" onclick="window._chartMode='line'; window._redrawMarketChart()" style="font-size:9px;font-weight:900;padding:2px 7px;border-radius:4px;border:1px solid #334155;background:#1e293b;color:#94a3b8;cursor:pointer;">折れ線</button>
+                                    </div>
+                                </div>
                             </div>
-                            <div style="width:140px; flex-shrink:0; display:flex; flex-direction:column; gap:8px;">
+                            <div class="market-sidebar-panel" style="width:140px; flex-shrink:0; display:flex; flex-direction:column; gap:8px;">
                                 <div style="background:#0f172a; border:1px solid #334155; border-radius:4px; padding:4px;">
                                     ${_bookStr}
                                 </div>
@@ -11133,12 +11561,105 @@ ${ds.desc}`)) {
                 ${detailHtml}
                 ${listHtml}`;
 
+            // チャートモード初期化
+            if (!window._chartMode) window._chartMode = 'candle';
+
+            // 折れ線チャート描画関数
+            window._drawLineChart = function(canvasId, histData, currentPrice) {
+                let canvas = document.getElementById(canvasId);
+                if (!canvas || !histData || histData.length < 2) return;
+                let dpr = window.devicePixelRatio || 1;
+                let W = canvas.parentElement.clientWidth;
+                let H = canvas.parentElement.clientHeight || 210;
+                canvas.width = W * dpr; canvas.height = H * dpr;
+                canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+                let ctx = canvas.getContext('2d');
+                ctx.scale(dpr, dpr);
+                ctx.clearRect(0, 0, W, H);
+                // 背景
+                ctx.fillStyle = '#0f172a'; ctx.fillRect(0, 0, W, H);
+
+                let yAxisW = 50;
+                let chartW = W - yAxisW;
+                let priceH = H - 24;
+                let paddingT = 16, paddingB = 4;
+                let usablePH = priceH - paddingT - paddingB;
+
+                let minP = Math.min(...histData);
+                let maxP = Math.max(...histData);
+                let pRange = (maxP - minP) || 1;
+                let pMin = minP - pRange * 0.08;
+                let pMax = maxP + pRange * 0.08;
+                let pR = pMax - pMin;
+                let yP = p => paddingT + usablePH * (1 - (p - pMin) / pR);
+
+                // グリッド
+                ctx.font = '10px Inter,Arial'; ctx.textAlign = 'left';
+                for (let i = 0; i <= 4; i++) {
+                    let p = pMin + pR * (i / 4);
+                    let y = yP(p);
+                    ctx.strokeStyle = 'rgba(51,65,85,0.5)'; ctx.lineWidth = 0.5;
+                    ctx.setLineDash([3,3]);
+                    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(chartW, y); ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.fillStyle = '#64748b';
+                    ctx.fillText('¥' + Math.floor(p).toLocaleString(), chartW + 5, y + 4);
+                }
+
+                // 折れ線描画 (上昇：緑 / 下落：赤)
+                let stepX = chartW / (histData.length - 1);
+                let lineColor = histData[histData.length-1] >= histData[0] ? '#22c55e' : '#ef4444';
+                let gradFill = ctx.createLinearGradient(0, paddingT, 0, priceH);
+                if (lineColor === '#22c55e') { gradFill.addColorStop(0,'rgba(34,197,94,0.3)'); gradFill.addColorStop(1,'rgba(34,197,94,0.0)'); }
+                else { gradFill.addColorStop(0,'rgba(239,68,68,0.3)'); gradFill.addColorStop(1,'rgba(239,68,68,0.0)'); }
+
+                ctx.beginPath();
+                histData.forEach((p, i) => { let x = i * stepX, y = yP(p); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+                ctx.lineTo((histData.length-1)*stepX, priceH);
+                ctx.lineTo(0, priceH);
+                ctx.closePath();
+                ctx.fillStyle = gradFill; ctx.fill();
+
+                ctx.strokeStyle = lineColor; ctx.lineWidth = 2; ctx.beginPath();
+                histData.forEach((p, i) => { let x = i * stepX, y = yP(p); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
+                ctx.stroke();
+
+                // 現在値ライン
+                if (currentPrice !== undefined) {
+                    let currY = yP(currentPrice);
+                    ctx.strokeStyle = lineColor; ctx.lineWidth = 1; ctx.setLineDash([6,3]);
+                    ctx.beginPath(); ctx.moveTo(0, currY); ctx.lineTo(chartW, currY); ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.fillStyle = lineColor;
+                    ctx.beginPath(); ctx.moveTo(chartW, currY); ctx.lineTo(chartW+4, currY-8); ctx.lineTo(chartW+50, currY-8); ctx.lineTo(chartW+50, currY+8); ctx.lineTo(chartW+4, currY+8); ctx.closePath(); ctx.fill();
+                    ctx.fillStyle = '#fff'; ctx.font = 'bold 10px Inter,Arial';
+                    ctx.fillText('¥'+Math.floor(currentPrice).toLocaleString(), chartW+6, currY+3.5);
+                }
+            };
+
+            // チャート再描画（モード選択対応）
+            window._redrawMarketChart = function() {
+                let selId = window._marketSelectedId;
+                let selCo = companies.find(c => c.id === selId);
+                if (!selCo) return;
+                let btnC = document.getElementById('chart-mode-candle');
+                let btnL = document.getElementById('chart-mode-line');
+                if (btnC && btnL) {
+                    if (window._chartMode === 'candle') { btnC.style.background = '#0284c7'; btnC.style.color = '#fff'; btnL.style.background = '#1e293b'; btnL.style.color = '#94a3b8'; }
+                    else { btnL.style.background = '#0284c7'; btnL.style.color = '#fff'; btnC.style.background = '#1e293b'; btnC.style.color = '#94a3b8'; }
+                }
+                if (window._chartMode === 'candle') {
+                    if (selCo._ohlcv && window._drawCandleChart) window._drawCandleChart('market-candle-chart', selCo._ohlcv, selCo.stockPrice);
+                } else {
+                    let hist = (stockHistory.datasets?.[selId]) || [selCo.stockPrice];
+                    if (window._drawLineChart) window._drawLineChart('market-candle-chart', hist, selCo.stockPrice);
+                }
+            };
+
             // 詳細カードのチャートを描画
             if (sel) {
                 setTimeout(() => {
-                    if (sel._ohlcv && window._drawCandleChart) {
-                        window._drawCandleChart('market-candle-chart', sel._ohlcv, sel.stockPrice);
-                    }
+                    window._redrawMarketChart();
                 }, 50);
             }
         };
@@ -11167,7 +11688,14 @@ ${ds.desc}`)) {
                             <div id="trade-tab-stock">
                                 <div style="display:flex; justify-content:space-between; margin-bottom:15px; background:#f9fafb; padding:15px; border-radius:12px; border:1px solid var(--border);">
                                     <div><div style="font-size:11px; color:var(--text-mut); font-weight:bold;">現在の株価</div><div id="trade-stock-price" class="text-success" style="font-size:20px; font-weight:900;">¥0</div></div>
-                                    <div style="text-align:right;"><div style="font-size:11px; color:var(--text-mut); font-weight:bold;">保有株 (平均単価)</div><div style="font-size:18px; font-weight:900;"><span id="trade-owned-shares">0</span> <span id="trade-avg-cost" style="font-size:11px; color:var(--text-mut); font-weight:normal;">(¥0)</span></div></div>
+                                    <div style="text-align:right;">
+                                        <div style="font-size:11px; color:var(--text-mut); font-weight:bold;">保有状況</div>
+                                        <div id="trade-position-info" style="font-size:16px; font-weight:900;">-</div>
+                                    </div>
+                                </div>
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; font-size:11px; color:var(--text-mut); background:#eff6ff; padding:8px 12px; border-radius:8px;">
+                                    <span>担当証券: <b id="trade-broker-name" style="color:var(--primary);">...</b></span>
+                                    <span>手数料率: <b id="trade-fee-rate" style="color:var(--primary);">0.1%</b></span>
                                 </div>
                                 
                                 <div style="font-size:12px; color:var(--danger); margin-bottom:15px; text-align:right; font-weight:bold;" id="trade-available-shares">市場残り: 0 株</div>
@@ -11175,9 +11703,18 @@ ${ds.desc}`)) {
                                     <span style="color:#047857; font-size:13px; font-weight:bold;">💰 手元資金</span><span id="trade-current-cash" style="font-weight:900; color:var(--success); font-size:15px;">¥0</span>
                                 </div>
                                 
-                                <div style="display:flex; gap:10px; margin-bottom:10px;">
-                                    <button id="btn-trade-buy-mode" class="btn-primary" style="flex:1; border-radius:8px;" onclick="setTradeMode('buy')">買う</button>
-                                    <button id="btn-trade-sell-mode" class="btn-outline" style="flex:1; border-radius:8px;" onclick="setTradeMode('sell')">売る</button>
+                                 <div style="display:flex; gap:10px; margin-bottom:10px;">
+                                    <button id="btn-trade-buy-mode" class="btn-primary" style="flex:1; border-radius:8px;" onclick="setTradeMode('buy')">現物買い</button>
+                                    <button id="btn-trade-sell-mode" class="btn-outline" style="flex:1; border-radius:8px;" onclick="setTradeMode('sell')">売却 / 空売り</button>
+                                </div>
+                                <div id="margin-toggle-area" style="margin-bottom:10px; display:none;">
+                                    <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:10px; border-radius:8px; display:flex; justify-content:space-between; align-items:center;">
+                                        <div>
+                                            <div style="font-size:11px; font-weight:900; color:var(--primary);">信用取引モード</div>
+                                            <div id="margin-notice" style="font-size:9px; color:#64748b;">(証拠金50% / 週利0.08〜0.1%)</div>
+                                        </div>
+                                        <button id="btn-margin-toggle" class="btn-outline" style="padding:4px 12px; font-size:11px; border-radius:20px;" onclick="toggleMarginMode()">信用を利用</button>
+                                    </div>
                                 </div>
                                 <div style="display:flex; gap:10px; margin-bottom:15px; background:#f1f5f9; padding:6px; border-radius:8px;">
                                     <button id="btn-type-market" class="btn-primary" style="flex:1; padding:6px; font-size:12px; border-radius:6px; box-shadow:none;" onclick="setTradeType('market')">即時 (成行)</button>
@@ -11237,10 +11774,42 @@ ${ds.desc}`)) {
                 modal = document.getElementById('trade-modal');
             }
 
-            document.getElementById('trade-company-name').innerText = "🏢 " + c.name.replace(/\[.*?\]\s*/, '');
-            document.getElementById('trade-stock-price').innerText = `¥${c.stockPrice.toLocaleString()}`;
-            document.getElementById('trade-owned-shares').innerText = `${o.toLocaleString()}`;
-            document.getElementById('trade-avg-cost').innerText = `(¥${o > 0 ? Math.floor(c.playerTotalCost / o).toLocaleString() : 0})`;
+            let posInfo = document.getElementById('trade-position-info');
+            let shortPos = p._shortPositions ? p._shortPositions[c.id] : null;
+            if (o > 0) {
+                posInfo.innerHTML = `<span style="color:var(--success)">現物: ${o.toLocaleString()}</span> <span style="font-size:10px;color:var(--text-mut)">(¥${Math.floor(c.playerTotalCost/o).toLocaleString()})</span>`;
+            } else if (shortPos) {
+                let diff = (shortPos.avgPrice - c.stockPrice) * shortPos.shares;
+                let diffColor = diff >= 0 ? 'var(--success)' : 'var(--danger)';
+                posInfo.innerHTML = `<span style="color:var(--danger)">空売り: ${shortPos.shares.toLocaleString()}</span><br><span style="font-size:10px;color:${diffColor}">含み損益: ¥${Math.floor(diff/10000).toLocaleString()}万</span>`;
+            } else {
+                posInfo.innerText = "なし";
+            }
+
+            // モードボタンの初期設定
+            if (shortPos) {
+                document.getElementById('btn-trade-buy-mode').innerText = "買い戻し (返済)";
+                document.getElementById('btn-trade-sell-mode').innerText = "空売り (新規)";
+            } else if (o === 0) {
+                document.getElementById('btn-trade-buy-mode').innerText = "現物買い";
+                document.getElementById('btn-trade-sell-mode').innerText = "空売り (Short)";
+            } else {
+                document.getElementById('btn-trade-buy-mode').innerText = "買い増し";
+                document.getElementById('btn-trade-sell-mode').innerText = "売却";
+            }
+
+            // 🌟 担当ブローカー情報の描画
+            if (!p.brokerCoId) {
+                let sogo = companies.find(cx => cx.sector === 'sogo' && !cx.isBankrupt);
+                if (sogo) p.brokerCoId = sogo.id;
+            }
+            let broker = companies.find(cx => cx.id === p.brokerCoId);
+            if (broker) {
+               let fr = broker.id.endsWith('_0') ? 0.12 : broker.id.endsWith('_1') ? 0.10 : 0.07;
+               document.getElementById('trade-broker-name').innerText = broker.name.replace(/\[.*?\]\s*/, '');
+               document.getElementById('trade-fee-rate').innerText = fr + '%';
+            }
+
             document.getElementById('trade-current-cash').innerText = `¥${p.cash.toLocaleString()}`;
             document.getElementById('trade-available-shares').innerText = `市場出回: ${(window.getMarketShares(c)).toLocaleString()} 株`;
 
@@ -11248,9 +11817,21 @@ ${ds.desc}`)) {
             document.getElementById('btn-des-execute').disabled = debt <= 0;
 
             window.tradeType = 'market';
+            window._isMarginMode = false;
             setTradeType('market');
             setTradeMode('buy');
             modal.style.display = 'flex';
+        };
+
+        window.toggleMarginMode = function() {
+            window._isMarginMode = !window._isMarginMode;
+            let btn = document.getElementById('btn-margin-toggle');
+            if (window._isMarginMode) {
+                btn.innerText = "信用利用中"; btn.className = "btn-primary"; btn.style.background = "var(--primary)";
+            } else {
+                btn.innerText = "信用を利用"; btn.className = "btn-outline"; btn.style.background = "transparent";
+            }
+            calcTrade();
         };
 
         // 🌟 新機能：タブ切り替え処理
@@ -11296,11 +11877,27 @@ ${ds.desc}`)) {
             tradeMode = m;
             document.getElementById('btn-trade-buy-mode').className = m === 'buy' ? 'btn-primary' : 'btn-outline';
             document.getElementById('btn-trade-sell-mode').className = m === 'sell' ? 'btn-danger' : 'btn-outline';
+            
+            // 🌟 信用切り替えエリアの表示制御
+            let c = companies.find(x => x.id === tradingCompanyId), p = companies[0];
+            let owned = p.shareholders[c.id] || 0;
+            let marginArea = document.getElementById('margin-toggle-area');
+            if (m === 'buy') {
+                marginArea.style.display = 'block';
+                document.getElementById('btn-margin-toggle').innerText = window._isMarginMode ? "信用利用中" : "信用を利用";
+            } else {
+                marginArea.style.display = owned > 0 ? 'none' : 'block'; // 保有株がない=新規空売りの場合は信用強制または表示
+                if (owned === 0) {
+                    window._isMarginMode = true; // 強制的に信用モードへ
+                    document.getElementById('btn-margin-toggle').innerText = "空売り(信用)";
+                    document.getElementById('btn-margin-toggle').className = "btn-primary";
+                }
+            }
+
             if (window.tradeType === 'market') {
                 document.getElementById('trade-estimate-label').innerText = m === 'buy' ? '必要資金(概算):' : '受取額(概算):';
             } else {
                 document.getElementById('trade-estimate-label').innerText = m === 'buy' ? '予約必要資金:' : '予約受取額:';
-                let c = companies.find(x => x.id === tradingCompanyId);
                 if (c) document.getElementById('trade-limit-price').value = Math.floor(c.stockPrice * (m === 'buy' ? 0.95 : 1.05));
             }
             calcTrade();
@@ -11378,109 +11975,110 @@ ${ds.desc}`)) {
             updateDashboard();
         };
 
-        window.executeTrade = function () {
+        // 🌟 共通取引コアロジック：プレイヤー・AI共通
+        window.performStockTrade = function (actorId, targetId, amount, type, price) {
+            let actor = companies.find(x => x.id === actorId);
+            let target = companies.find(x => x.id === targetId);
+            if (!actor || !target || amount <= 0) return false;
+
+            let totalPrice = price * amount;
+            
+            // ブローカー特定
+            if (!actor.brokerCoId) {
+                let sogo = companies.filter(cx => cx.sector === 'sogo' && !cx.isBankrupt);
+                if (sogo.length > 0) actor.brokerCoId = sogo[0].id;
+            }
+            let broker = companies.find(cx => cx.id === actor.brokerCoId);
+            let feeRate = broker ? (broker.id.endsWith('_0') ? 0.0012 : broker.id.endsWith('_1') ? 0.0010 : 0.0007) : 0.001;
+            let comm = Math.floor(totalPrice * feeRate);
+
+            if (type === 'spot') {
+                // 現物買い
+                if (actor.cash < totalPrice + comm) return false;
+                if (actorId === 'player' && (target.shareholders['player'] || 0) + amount > target.shares * 0.4 && target.id !== 'player') {
+                    alert("40%超の取得はTOBが必要です。"); return false;
+                }
+                actor.cash -= (totalPrice + comm);
+                if (broker) { broker.cash += comm; broker.lastRevenue += comm; }
+                target.shareholders[actorId] = (target.shareholders[actorId] || 0) + amount;
+                
+                // 平均取得単価の記録 (現物)
+                if (!actor._spotAvgPrices) actor._spotAvgPrices = {};
+                let curAvg = actor._spotAvgPrices[targetId] || 0;
+                let curCount = (target.shareholders[actorId] || 0) - amount;
+                actor._spotAvgPrices[targetId] = (curAvg * curCount + totalPrice) / (curCount + amount);
+                
+                if (actorId === 'player') addLog(`【現物取得】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 取得。`, 'success', '自社');
+            } else if (type === 'spot_sell') {
+                // 現物売却
+                let owned = target.shareholders[actorId] || 0;
+                if (owned < amount) return false;
+                actor.cash += (totalPrice - comm);
+                if (broker) { broker.cash += comm; broker.lastRevenue += comm; }
+                target.shareholders[actorId] -= amount;
+                if (actorId === 'player') addLog(`【現物売却】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 決済。`, 'normal', '自社');
+            } else if (type === 'marginlong') {
+                // 信用買い
+                let marginReq = Math.floor(totalPrice * 0.5);
+                if (actor.cash < marginReq + comm) return false;
+                actor.cash -= (marginReq + comm);
+                if (broker) { broker.cash += comm; broker.lastRevenue += comm; }
+
+                if (!actor._marginLongs) actor._marginLongs = {};
+                let pos = actor._marginLongs[targetId] || { count: 0, avgPrice: 0, margin: 0 };
+                pos.avgPrice = (pos.avgPrice * pos.count + totalPrice) / (pos.count + amount);
+                pos.count += amount;
+                pos.margin += marginReq;
+                actor._marginLongs[targetId] = pos;
+                if (actorId === 'player') addLog(`【信用買い執行】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 (証拠金 ¥${Math.floor(marginReq/10000).toLocaleString()}万)。`, 'success', '自社');
+            } else if (type === 'marginshort') {
+                // 空売り
+                let marginReq = Math.floor(totalPrice * 0.5);
+                if (actor.cash < marginReq + comm) return false;
+                actor.cash -= (marginReq + comm);
+                if (broker) { broker.cash += comm; broker.lastRevenue += comm; }
+
+                if (!actor._marginShorts) actor._marginShorts = {};
+                let pos = actor._marginShorts[targetId] || { count: 0, avgPrice: 0, margin: 0 };
+                pos.avgPrice = (pos.avgPrice * pos.count + totalPrice) / (pos.count + amount);
+                pos.count += amount;
+                pos.margin += marginReq;
+                actor._marginShorts[targetId] = pos;
+                if (actorId === 'player') addLog(`【新規空売り】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 (証拠金 ¥${Math.floor(marginReq/10000).toLocaleString()}万)。`, 'alert', '自社');
+            }
+            return true;
+        };
+
+        window.executeTrade = function (forceType) {
             let originalAmount = parseInt(document.getElementById('trade-amount').value);
             let a = originalAmount;
-            let c = companies.find(x => x.id === tradingCompanyId), p = companies[0];
+            let c = companies.find(x => x.id === tradingCompanyId);
             if (isNaN(a) || a <= 0) return;
 
+            let p = companies[0];
+            let type = forceType || (tradeMode === 'buy' ? (window._isMarginMode ? 'marginlong' : 'spot') : (p.shareholders[c.id] >= a ? 'spot_sell' : 'marginshort'));
+            
             if (window.tradeType === 'limit') {
-                // 指値注文の受付処理
                 let limitPrice = parseInt(document.getElementById('trade-limit-price').value);
                 if (isNaN(limitPrice) || limitPrice <= 0) return alert("希望価格を正しく入力してください。");
-
-                if (tradeMode === 'buy') {
-                    let cost = limitPrice * a;
-                    if (p.cash < cost) return alert("予約資金が不足しています。"); // Funds are NOT deducted immediately, just checked. WAIT, we should check it, but what if they spend it? We just fail it on execute Turn.
-                    addLog(`【注文受付】${c.name.replace(/\[.*?\]\s*/, '')} の買い指値注文を受け付けました (${a.toLocaleString()}株 @ ¥${limitPrice.toLocaleString()})。`, 'normal', '市場');
-                } else {
-                    let o = c.shareholders['player'] || 0;
-                    if (o < a) return alert("保有株数が不足しています。");
-                    addLog(`【注文受付】${c.name.replace(/\[.*?\]\s*/, '')} の売り指値注文を受け付けました (${a.toLocaleString()}株 @ ¥${limitPrice.toLocaleString()})。`, 'normal', '市場');
-                }
-
+                let cost = limitPrice * a;
+                let reqCash = (type === 'marginlong' || type === 'marginshort') ? Math.floor(cost * 0.5) : cost;
+                if (p.cash < reqCash) return alert("必要資金（証拠金）が不足しています。");
                 if (!p.pendingOrders) p.pendingOrders = [];
-                p.pendingOrders.push({ id: Date.now() + Math.floor(Math.random() * 100), coId: c.id, type: tradeMode, amount: a, price: limitPrice });
-
-                closeModal('trade-modal');
-                updateDashboard();
-                if (typeof renderPortfolio === 'function') renderPortfolio();
-                return;
+                p.pendingOrders.push({ id: Date.now(), coId: c.id, type: type, amount: a, price: limitPrice });
+                addLog(`【指値注文】${c.name.replace(/\[.*?\]\s*/,'')} の ${type}注文 (${a.toLocaleString()}株 @¥${limitPrice.toLocaleString()})。`, 'normal', '市場');
+                closeModal('trade-modal'); updateDashboard(); return;
             }
 
-            // 流動性の初期化（念のため）
-            if (!c.weeklyVolume) {
-                let floatS = (c.shareholders && c.shareholders['market']) ? c.shareholders['market'] : 0;
-                c.weeklyVolume = Math.max(1, Math.floor(c.shares * 0.02) + Math.floor(floatS * 0.10));
-            }
-            if (c.usedVolume === undefined) c.usedVolume = 0;
-            let availableVolume = c.weeklyVolume - c.usedVolume;
-
-            if (tradeMode === 'buy') {
-                if (availableVolume < a) {
-                    alert(`【注文制限】今週の市場の売り手（流動性）が不足しています。\n約定可能上限は ${availableVolume.toLocaleString()}株 です。`);
-                    a = availableVolume;
-                    if (a <= 0) return;
-                    document.getElementById('trade-amount').value = a;
-                }
-                let cost = c.stockPrice * a;
-                if (p.cash < cost) return alert("資金不足です！");
-                if (a > window.getMarketShares(c)) return alert("市場に出回っている株が不足しています。");
-
-                let currentOwned = c.shareholders['player'] || 0;
-                let newOwned = currentOwned + a;
-                let newRatio = newOwned / c.shares;
-                let oldRatio = currentOwned / c.shares;
-
-                if (newRatio >= 0.40 && c.id !== 'player') return alert("【法規制】市場での直接買付は発行済株式の40%未満に制限されています。\n過半数を取得して買収するには「TOB (公開買付)」を宣言してください。");
-
-                p.cash -= cost;
-                c.shareholders['player'] = newOwned;
-                if (c.shareholders['market'] !== undefined) {
-                    c.shareholders['market'] = Math.max(0, (c.shareholders['market'] || 0) - a);
-                }
-                c.playerTotalCost += cost;
-                c.usedVolume += a; // 取引枠を消費
-
-                let _cName = c.name.replace(/\[.*?\]\s*/, '');
-                let _newPct = (newRatio * 100).toFixed(1);
-                addLog(`【株式取得】${_cName} を ${a.toLocaleString()}株 購入（¥${Math.floor(cost / 10000).toLocaleString()}万）→ 保有${_newPct}%`, 'success', '自社', 3);
-                if (oldRatio < 0.05 && newRatio >= 0.05) addLog(`【大量保有報告】${_cName} の株式5%を突破。大量保有報告義務が発生しました。`, 'news', '自社', 4);
-                if (oldRatio < 0.10 && newRatio >= 0.10) addLog(`【主要株主】${_cName} の株式10%を取得。主要株主として登録されます。`, 'alert', '自社', 4);
-                if (oldRatio < 0.20 && newRatio >= 0.20) addLog(`【筆頭株主】${_cName} の株式20%を取得！持分法適用関連会社化。経営への影響力が増大します。`, 'alert', '自社', 5);
-                if (oldRatio < 0.33 && newRatio >= 0.33) addLog(`【拒否権取得】${_cName} の株式1/3超を取得！重要事項の拒否権を獲得しました。TOBで過半数取得を目指しましょう。`, 'alert', '自社', 5);
+            // 成行執行
+            let success = performStockTrade('player', c.id, a, type, c.stockPrice);
+            if (success) {
+                c.usedVolume = (c.usedVolume || 0) + a;
+                closeModal('trade-modal'); updateDashboard(); renderPortfolio();
+                setTimeout(() => { if (window.openCompanyModal) window.openCompanyModal(c.id); }, 100);
             } else {
-                if (c.isLimitDown) return alert("【売却不可】現在ストップ安のため、市場に買い手が存在しません。\n取引成立不可のため、買い注文が入る（来週以降）のをお待ちください。");
-
-                if (availableVolume < a) {
-                    alert(`【注文制限】市場の買い手（流動性）が不足しています。\n今週の売却上限は ${availableVolume.toLocaleString()}株 です。`);
-                    a = availableVolume;
-                    if (a <= 0) return;
-                    document.getElementById('trade-amount').value = a;
-                }
-                let cost = c.stockPrice * a;
-                let o = c.shareholders['player'] || 0;
-                if (o < a) return alert("保有株数が不足しています。");
-
-                let profitPerShare = c.stockPrice - (c.playerTotalCost / o);
-                let totalProfit = profitPerShare * a;
-                window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + totalProfit;
-
-                p.cash += cost;
-                c.playerTotalCost -= (c.playerTotalCost / o) * a;
-                c.shareholders['player'] -= a;
-                if (c.isPublic) c.shareholders['market'] = (c.shareholders['market'] || 0) + a;
-                if (c.shareholders['player'] === 0) c.playerTotalCost = 0;
-
-                c.usedVolume += a; // 取引枠を消費
-
-                let _cName2 = c.name.replace(/\[.*?\]\s*/, '');
-                let _profSign = totalProfit >= 0 ? '+' : '';
-                addLog(`【株式売却】${_cName2} ${a.toLocaleString()}株 売却（売却益 ${_profSign}¥${Math.floor(totalProfit / 10000).toLocaleString()}万）`, totalProfit >= 0 ? 'success' : 'warning', '自社', 3);
+                alert("注文を執行できませんでした。資金や流動性を確認してください。");
             }
-            closeModal('trade-modal'); updateDashboard(); renderPortfolio();
-            // 売買後にUIを再描画するため再度モーダルを開く処理
-            setTimeout(() => { if (window.openCompanyModal) window.openCompanyModal(c.id); }, 100);
         };
 
 
@@ -12532,7 +13130,7 @@ ${ds.desc}`)) {
         };
         window.subCmdSvcPriceUp = function (subId) {
             let sub = companies.find(c => c.id === subId); if (!sub) return;
-            sub.servicePriceMult = Math.min(2.0, Math.round(((sub.servicePriceMult || 1.0) + 0.10) * 10) / 10);
+            sub.servicePriceMult = Math.min(10.0, Math.round(((sub.servicePriceMult || 1.0) + 0.10) * 10) / 10);
             addLog(`【子会社命令】${sub.name.replace(/\[.*?\]\s*/g, '')} がサービス料を値上げ。(+${Math.round((sub.servicePriceMult - 1) * 100)}%)`, 'success', 'M&A'); renderSubsidiaryList(); updateDashboard();
         };
 
@@ -12806,31 +13404,36 @@ ${ds.desc}`)) {
 
             let targetCos = companies.filter(c => targetSectors.includes(c.sector) && (c.isPublic || c.id === 'player') && !c.isBankrupt);
 
+            let yearStr = 2020 + Math.floor((week - 1) / 48);
+            let monthStr = Math.floor(((week - 1) % 48) / 4) + 1;
+
             let html = `
-                <div style="text-align:center; border-bottom:3px double var(--border); padding-bottom:15px; margin-bottom:25px;">
-                    <div style="font-size:14px; color:var(--danger); font-weight:800; letter-spacing:2px;">THE M&A JOURNAL 特別増刊号</div>
-                    <div style="font-size:28px; font-weight:900; color:var(--text-main); margin:5px 0;">四半期 決算報告</div>
-                    <div style="font-size:13px; font-weight:bold; color:var(--text-mut);">【${part === 1 ? '前半' : '後半'}グループ】 — ${2020 + Math.floor((week - 1) / 48)}年 ${Math.floor(((week - 1) % 48) / 4) + 1}月 発表</div>
+                <div style="text-align:center; padding-bottom:16px; margin-bottom:24px; border-bottom:3px double #111827; font-family:'Noto Serif JP','Playfair Display',Georgia,serif;">
+                    <div style="font-size:10px; color:#6b7280; font-weight:700; letter-spacing:4px; margin-bottom:6px; font-family:'Inter',sans-serif;">GLOBAL BUSINESS INTELLIGENCE</div>
+                    <div style="font-size:32px; font-weight:900; color:#111827; font-family:'Playfair Display','Noto Serif JP',Georgia,serif; margin-bottom:2px; line-height:1;">THE M&A JOURNAL</div>
+                    <div style="font-size:11px; color:#6b7280; border-top:1px solid #111827; margin-top:8px; padding-top:6px; letter-spacing:1px;">特別増刊号 ─ 四半期決算報告</div>
+                    <div style="font-size:20px; font-weight:900; color:#111827; margin-top:12px;">Q${Math.ceil(monthStr / 3)} 決算報告</div>
+                    <div style="font-size:12px; color:#4b5563; margin-top:4px;">【${part === 1 ? '前半' : '後半'}グループ】 — ${yearStr}年 ${monthStr}月 発表</div>
                 </div>`;
 
             if (targetCos.length === 0) {
-                html += `<div style="text-align:center; padding:40px; color:var(--text-mut); font-weight:bold;">このグループに上場企業はありません。</div>`;
+                html += `<div style="text-align:center; padding:40px; color:#6b7280; font-weight:bold; font-family:'Noto Serif JP',Georgia,serif;">このグループに上場企業はありません。</div>`;
             } else {
                 targetSectors.forEach(sec => {
                     let secCos = targetCos.filter(c => c.sector === sec).sort((a, b) => b.marketCap - a.marketCap);
                     if (secCos.length === 0) return;
-                    html += `<div style="background:var(--bg); border-left:6px solid var(--primary); padding:10px 15px; font-size:16px; font-weight:bold; margin-top:20px; margin-bottom:15px; border-radius:4px;">${sectors[sec].n}</div><div class="grid-2">`;
+                    html += `<div style="font-family:'Noto Serif JP',Georgia,serif; font-size:15px; font-weight:900; color:#111827; margin-top:20px; margin-bottom:14px; padding:8px 12px; border-left:4px solid #111827; border-bottom:1px solid #d1d5db; background:#f3f4f6;">☕ ${sectors[sec].n}</div><div class="grid-2">`;
                     secCos.forEach(c => {
                         let qProf = c.lastQProfit || 0, pProf = c.prevQProfit || 0, isUp = qProf >= pProf, isPlayer = (c.id === 'player');
                         let ratio = pProf === 0 ? (qProf > 0 ? 100 : (qProf < 0 ? -100 : 0)) : ((qProf - pProf) / Math.abs(pProf)) * 100;
-                        html += `<div class="card" style="margin:0; ${isPlayer ? "border: 2px solid var(--warning); background:#fffbeb;" : "border:1px solid var(--border);"}">
-                            <div class="flex-between" style="margin-bottom:12px;">
-                                <div style="font-size:16px; font-weight:900;">${isPlayer ? '👑 ' : ''}${c.name.replace(/\[.*?\]\s*/, '')}</div>
-                                <span style="background:${isPlayer ? 'var(--warning)' : (isUp ? 'var(--success)' : 'var(--danger)')}; color:#fff; font-size:10px; padding:2px 8px; border-radius:12px; font-weight:bold;">${isPlayer ? '自社' : (isUp ? '増益' : '減益')}</span>
+                        html += `<div style="margin:0; padding:16px; border:1px solid #d1d5db; background:${isPlayer ? '#fefce8' : '#faf8f5'}; font-family:'Noto Serif JP',Georgia,serif; ${isPlayer ? 'border-left:4px solid #d97706;' : ''}">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                <div style="font-size:15px; font-weight:900; color:#111827;">${isPlayer ? '👑 ' : ''}${c.name.replace(/\[.*?\]\s*/, '')}</div>
+                                <span style="background:${isPlayer ? '#d97706' : (isUp ? '#065f46' : '#991b1b')}; color:#fff; font-size:10px; padding:2px 8px; border-radius:2px; font-weight:bold; letter-spacing:0.5px;">${isPlayer ? '自社' : (isUp ? '増益' : '減益')}</span>
                             </div>
-                            <div class="flex-between" style="font-size:13px; margin-bottom:8px;"><span style="color:var(--text-mut);">今期純利益:</span><b style="font-size:15px;">¥${qProf.toLocaleString()}</b></div>
-                            <div class="flex-between" style="font-size:12px; margin-bottom:12px; border-bottom:1px dashed var(--border); padding-bottom:12px;"><span style="color:var(--text-mut);">前期比:</span><b style="color:${isUp ? 'var(--success)' : 'var(--danger)'};">${ratio > 0 ? '+' : ''}${ratio.toFixed(1)}%</b></div>
-                            <div class="flex-between" style="font-size:12px;"><span style="color:var(--text-mut);">配当金:</span><b style="color:var(--primary);">¥${(c.lastDividendPerShare || 0).toLocaleString()} / 株</b></div>
+                            <div style="display:flex; justify-content:space-between; font-size:13px; margin-bottom:6px;"><span style="color:#6b7280;">今期純利益:</span><b style="font-size:15px; color:#111827;">¥${qProf.toLocaleString()}</b></div>
+                            <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:10px; border-bottom:1px dashed #d1d5db; padding-bottom:10px;"><span style="color:#6b7280;">前期比:</span><b style="color:${isUp ? '#065f46' : '#991b1b'};">${ratio > 0 ? '+' : ''}${ratio.toFixed(1)}%</b></div>
+                            <div style="display:flex; justify-content:space-between; font-size:12px;"><span style="color:#6b7280;">配当金:</span><b style="color:#111827;">¥${(c.lastDividendPerShare || 0).toLocaleString()} / 株</b></div>
                         </div>`;
                     });
                     html += `</div>`;
@@ -12842,11 +13445,11 @@ ${ds.desc}`)) {
             let modalsArea = document.getElementById('modals-area');
             let modal = document.getElementById('quarterly-report-modal');
             if (!modal && modalsArea) {
-                modalsArea.insertAdjacentHTML('beforeend', `<div id="quarterly-report-modal" class="modal-overlay" style="z-index:10010;"><div class="modal-content" style="max-width:800px; padding:30px;"><button class="close-btn" onclick="closeModal('quarterly-report-modal')">✕</button><div id="quarterly-report-content"></div><div style="text-align:center; margin-top:25px;" id="quarterly-report-btn-area"></div></div></div>`);
+                modalsArea.insertAdjacentHTML('beforeend', `<div id="quarterly-report-modal" class="modal-overlay" style="z-index:10010;"><div class="modal-content" style="max-width:800px; padding:30px; background:#faf8f5; border-radius:4px; border:1px solid #d1d5db; font-family:'Noto Serif JP',Georgia,serif;"><button class="close-btn" onclick="closeModal('quarterly-report-modal')">✕</button><div id="quarterly-report-content"></div><div style="text-align:center; margin-top:25px; border-top:2px solid #111827; padding-top:16px;" id="quarterly-report-btn-area"></div></div></div>`);
                 modal = document.getElementById('quarterly-report-modal');
             }
             document.getElementById('quarterly-report-content').innerHTML = html;
-            document.getElementById('quarterly-report-btn-area').innerHTML = `<button class="btn-primary btn-large" style="max-width:300px; margin:0 auto; border-radius:12px;" onclick="${btnAction}">${btnText}</button>`;
+            document.getElementById('quarterly-report-btn-area').innerHTML = `<button class="btn-primary btn-large" style="max-width:300px; margin:0 auto; border-radius:2px; background:#111827; font-family:'Noto Serif JP',Georgia,serif; letter-spacing:1px;" onclick="${btnAction}">${btnText}</button>`;
             modal.style.display = 'flex';
         };
         // ==========================================
@@ -13029,32 +13632,34 @@ ${ds.desc}`)) {
                     <div style="display:flex;">${tabBtns}</div>
                 </div>`;
 
+            // 🌍 全タブ共通のデータ集計（不動産・子会社・ポートフォリオ）
+            let props = ownedProperties.filter(p => p.owner === cid);
+            let _extraProps = [];
+            Object.keys(globalNetworkData).forEach(rk => {
+                globalNetworkData[rk].districts.forEach(d => {
+                    d.properties.forEach((prop, idx) => {
+                        if (prop.owner === cid) {
+                            let alreadyIn = props.some(p => p.rk === rk && p.distName === d.name && p.idx === idx);
+                            if (!alreadyIn) {
+                                _extraProps.push({ name: `[${d.name}] ${prop.type}`, currentValue: prop.currentValue || (prop.rent * 2600), rk, distName: d.name, idx });
+                            }
+                        }
+                    });
+                });
+            });
+            let allProps = [...props, ..._extraProps];
+            let subs = companies.filter(c => c.id !== cid && (c.parent === cid || (window.getFloatPct(c, cid) > 0.5)));
+
             // ── タブ別コンテンツ ──
             if (tab === 'profile') {
                 // 既存レイアウト（円グラフ ＋ 右カラム）をそのまま維持
-                // ownedPropertiesとglobalNetworkData両方から所有物件を収集
-                let props = ownedProperties.filter(p => p.owner === cid);
-                // globalNetworkDataからも補完（ownedPropertiesに登録されていない場合）
-                let _extraProps = [];
-                Object.keys(globalNetworkData).forEach(rk => {
-                    globalNetworkData[rk].districts.forEach(d => {
-                        d.properties.forEach((prop, idx) => {
-                            if (prop.owner === cid) {
-                                let alreadyIn = props.some(p => p.rk === rk && p.distName === d.name && p.idx === idx);
-                                if (!alreadyIn) {
-                                    _extraProps.push({ name: `[${d.name}] ${prop.type}`, currentValue: prop.currentValue || (prop.rent * 2600), rk, distName: d.name, idx });
-                                }
-                            }
-                        });
-                    });
-                });
-                let allProps = [...props, ..._extraProps];
                 let propHtml = allProps.length > 0 ? allProps.map(p => `<div class="flex-between" style="border-bottom:1px dashed var(--border); padding:10px 0; font-size:13px;"><span>🏢 ${(p.name || '').substring(0, 18)}</span><span style="font-weight:bold; color:var(--success);">¥${Math.floor((p.currentValue || 0) / 10000).toLocaleString()}万</span></div>`).join('') : '<div style="color:var(--text-mut); text-align:center; padding:15px;">所有物件なし</div>';
-                let subs = companies.filter(c => c.id !== cid && (c.parent === cid || (window.getFloatPct(c, cid) > 0.5)));
+                
                 let subHtml = subs.length > 0 ? subs.map(c => {
                     let domRate = (window.getFloatShares(c) > 0 && c.shareholders && c.shareholders[cid]) ? (window.getFloatPct(c, cid) * 100).toFixed(1) : '--';
                     return `<div class="flex-between" style="border-bottom:1px dashed var(--border); padding:10px 0; font-size:13px;"><span>🤝 ${c.name.replace(/\[.*?\]\s*/, '').substring(0, 18)}</span><span style="color:#8b5cf6;font-size:12px;font-weight:bold;">${domRate}% 支配</span></div>`;
                 }).join('') : '<div style="color:var(--text-mut);text-align:center;padding:15px;">子会社なし</div>';
+                
                 let portfolioHtml = ''; let portCount = 0;
                 companies.forEach(c => { if (c.id !== cid && c.shareholders[cid] > 0) { portCount++; portfolioHtml += `<div class="flex-between" style="border-bottom:1px dashed var(--border);padding:10px 0;font-size:13px;"><span>📈 ${c.name.replace(/\[.*?\]\s*/, '').substring(0, 18)}</span><span style="font-weight:bold;color:var(--primary);">¥${(c.stockPrice * c.shareholders[cid] / 10000).toLocaleString()}万</span></div>`; } });
                 if (portCount === 0) portfolioHtml = '<div style="color:var(--text-mut);text-align:center;padding:15px;">保有株式なし</div>';
@@ -13242,20 +13847,27 @@ ${ds.desc}`)) {
                     profit = revenue - expense;
                 }
 
-                // 実際の総資産 = 現金 + 普通預金 + 定期預金 + 株式保有評価 + 不動産
+                // 🌟 総資産の計算（全資産を網羅）
+                let _reVal0 = 0;
+                // allProps は CID をキーに最初の方で集計されている
+                allProps.forEach(p => { _reVal0 += p.currentValue || (p.rent * 2600); });
+
                 let _stockVal0 = 0;
-                // target が「保有している他社株」の評価額（逆方向：各社のshareholders[target.id]を見る）
                 for (let co of companies) {
-                    let sharesHeld = (co.shareholders && co.shareholders[target.id]) || 0;
-                    if (sharesHeld > 0 && co.stockPrice > 0) _stockVal0 += co.stockPrice * sharesHeld;
+                    let sh = co.shareholders ? co.shareholders[target.id] : 0;
+                    if (sh > 0) _stockVal0 += Math.floor(sh * co.stockPrice);
                 }
-                let assets = Math.max(
-                    target.cash + _depTotal0 + _tdTotal0 + _stockVal0,
-                    target.marketCap * 0.5
-                );
+                
+                let assets = target.cash + _depTotal0 + _tdTotal0 + _stockVal0 + _reVal0;
                 let debt = _debt0;
-                let depTotal = _depTotal0;
                 let equity = Math.max(0, assets - debt);
+                
+                // 🌟 指標用：安定した年換算利益（1週間平均を48倍）
+                // lastRevenueは四半期累計。今がクォーターの何週目かを逆算して週平均を出す
+                let _weekInQ = Math.max(1, (week % 13) || 13);
+                let _weeklyProfit = (target.lastRevenue > 0) ? (target.lastProfit / _weekInQ) : (profit);
+                let annualizedProfit = _weeklyProfit * 48; // 年計換算
+                target._annualProfitForMetric = annualizedProfit; // 指標用に保存
 
                 // ブロック図ビルダー（インライン版）
                 const buildBlock = (leftBlocks, rightBlocks, lTitle, rTitle) => {
@@ -13280,8 +13892,17 @@ ${ds.desc}`)) {
 
                 const plLeft = [{ label: '純利益', val: Math.max(0, profit), color: '#4ade80' }, { label: '費用', val: Math.max(0, expense), color: '#f87171' }];
                 const plRight = [{ label: '収益', val: Math.max(1, revenue), color: '#60a5fa' }];
-                const bsLeft = [{ label: '現金・預金', val: target.cash + depTotal, color: '#4ade80' }, { label: 'その他資産', val: Math.max(0, assets - target.cash - depTotal), color: '#60a5fa' }];
-                const bsRight = [{ label: '負債', val: Math.max(0, debt), color: '#f87171' }, { label: '資本', val: Math.max(1, equity - profit), color: '#60a5fa' }, { label: '当期利益', val: Math.max(0, profit), color: '#4ade80' }];
+                const bsLeft = [
+                    { label: '現金・預金', val: target.cash + _depTotal0 + _tdTotal0, color: '#4ade80' },
+                    { label: 'その他資産', val: _stockVal0 + _reVal0, color: '#60a5fa' }
+                ];
+                // 純資産(equity)を「資本(capital)」と「利益(profit)」に分解して表示
+                let displayProfit = Math.max(0, profit);
+                const bsRight = [
+                    { label: '負債', val: Math.max(0, debt), color: '#f87171' },
+                    { label: '資本', val: Math.max(0, equity - displayProfit), color: '#60a5fa' },
+                    { label: '当期利益', val: displayProfit, color: '#4ade80' }
+                ];
 
                 // 銀行金利情報（bankセクターのみ）
                 let bankRateHtml = '';
@@ -13340,23 +13961,61 @@ ${ds.desc}`)) {
                         ${buildBlock(bsLeft, bsRight, '資産', '負債・純資産')}
                         <div style="margin-top:10px;background:#f9fafb;border-radius:10px;padding:12px;border:1px solid #e2e8f0;">
                             ${[
-                        { label: '総資産', val: assets, color: '#2563eb' },
-                        { label: '負債', val: debt, color: '#dc2626' },
-                        { label: '純資産', val: equity, color: '#16a34a', bold: true, top: true },
-                    ].map(r => `<div style="display:flex;justify-content:space-between;padding:${r.top ? '8px 0 0 0;border-top:1px dashed #cbd5e1;margin-top:4px' : '5px 0'};font-size:${r.bold ? 13 : 12}px;">
+                                { label: '総資産', val: assets, color: '#2563eb' },
+                                { label: '負債', val: debt, color: '#dc2626' },
+                                { label: '純資産', val: equity, color: '#16a34a', bold: true, top: true },
+                            ].map(r => `<div style="display:flex;justify-content:space-between;padding:${r.top ? '8px 0 0 0;border-top:2px solid #e2e8f0;margin-top:4px' : '5px 0'};font-size:${r.bold ? 13 : 12}px;">
                                 <span style="color:#64748b;font-weight:${r.bold ? 700 : 400};">${r.label}</span>
-                                <span style="font-weight:800;color:${r.color};">${r.val < 0 ? '-' : ''}¥${f(Math.abs(r.val))}</span>
+                                <span style="font-weight:800;color:${r.color};">¥${f(r.val)}</span>
                             </div>`).join('')}
                             <div style="margin-top:8px;border-top:1px dashed #cbd5e1;padding-top:8px;">
                                 <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px;">
                                     <span style="color:#64748b;">自己資本比率</span>
-                                    <span style="font-weight:800;color:#16a34a;">${assets > 0 ? (equity / assets * 100).toFixed(1) : 0}%</span>
+                                    <span style="font-weight:800;color:var(--primary);">${assets > 0 ? (equity / assets * 100).toFixed(1) : 0}%</span>
                                 </div>
                                 <div style="height:5px;background:#e2e8f0;border-radius:999px;overflow:hidden;">
-                                    <div style="height:100%;width:${assets > 0 ? Math.min(100, (equity / assets * 100).toFixed(1)) : 0}%;background:linear-gradient(90deg,#4ade80,#60a5fa);border-radius:999px;"></div>
+                                    <div style="height:100%;width:${assets > 0 ? Math.min(100, (equity / assets * 100)) : 0}%;background:var(--primary);border-radius:999px;"></div>
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
+                
+                <div style="margin-top:16px; border-top:2px solid var(--border); padding-top:16px;">
+                    <div style="font-size:11px;color:#64748b;margin-bottom:12px;font-weight:700;letter-spacing:1px;">📈 プロフェッショナル財務指標</div>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:10px;">
+                        ${(() => {
+                            // 🌟 指標計算ロジック（修正：二重換算の防止と実数ベースへの統一）
+                            let annualProfit = target._annualProfitForMetric || profit * 48;
+                            let roe = equity > 0 ? (annualProfit / equity * 100).toFixed(1) : '0.0';
+                            let per = (annualProfit > 0) ? (target.marketCap / annualProfit).toFixed(1) : '—';
+                            let pbr = (equity > 0) ? (target.marketCap / equity).toFixed(1) : '—';
+                            let payout = (target._dividendPaid && target.lastQProfit > 0) ? (target._dividendPaid / target.lastQProfit * 100).toFixed(1) : (target.dividendRate || '0.0');
+                            
+                            // 🌟 信用格付けロジック
+                            let capRatio = assets > 0 ? (equity / assets) : 0;
+                            let margin = revenue > 0 ? (profit / revenue) : 0;
+                            let score = (capRatio * 50) + (margin * 30) + (target.cash / Math.max(1, debt) * 20);
+                            let rating = score > 40 ? {r:'S', c:'#16a34a', d:'極めて高い安全性'} : 
+                                         score > 25 ? {r:'A', c:'#2563eb', d:'良好な財務水準'} :
+                                         score > 15 ? {r:'B', c:'#d97706', d:'標準的な安全性'} :
+                                         score > 5  ? {r:'C', c:'#ea580c', d:'財務上の懸念点あり'} : {r:'D', c:'#dc2626', d:'債務超過・破綻リスク'};
+                            
+                            return [
+                                { label: 'ROE (自己資本利益率)', val: roe + '%', sub: '収益性の効率' },
+                                { label: '信用格付け', val: rating.r, sub: rating.d, color: rating.c },
+                                { label: '配当性向', val: payout + '%', sub: '利益の還元率' },
+                                { label: 'PER (株価収益率)', val: per + '倍', sub: '利益への期待値' },
+                                { label: 'PBR (株価純資産倍率)', val: pbr + '倍', sub: '資産の割安度' },
+                            ].map(m => `<div style="background:#fff; border:1px solid var(--border); border-radius:12px; padding:12px; text-align:center; box-shadow:0 1px 2px rgba(0,0,0,0.05);">
+                                <div style="font-size:9px; color:#64748b; margin-bottom:4px; font-weight:bold;">${m.label}</div>
+                                <div style="font-size:18px; font-weight:900; color:${m.color || 'var(--text-main)'};">${m.val}</div>
+                                <div style="font-size:8px; color:#94a3b8; margin-top:2px;">${m.sub}</div>
+                            </div>`).join('');
+                        })()}
+                    </div>
+                    <div style="margin-top:12px; font-size:10px; color:#94a3b8; background:#f8fafc; padding:10px; border-radius:8px;">
+                        ※ROEおよびPERは、直近の四半期損益を年計換算（×4）して算出しています。格付けは自己資本比率および資金繰り状況に基づく独自の試算です。
                     </div>
                 </div>`;
             } else if (tab === 'group') {
@@ -14337,29 +14996,31 @@ ${ds.desc}`)) {
 
         // 1. インフラ契約先の初期化（未設定ならランダムに設定）
         function ensureContracts() {
-            let p = companies[0];
-            if (!p.contracts) p.contracts = { logistics: null, it: null, insurance: {}, logByCountry: {}, itByCountry: {} };
-            if (!p.contracts.insurance || typeof p.contracts.insurance !== 'object') p.contracts.insurance = {};
-            if (!p.contracts.logByCountry) p.contracts.logByCountry = {};
-            if (!p.contracts.itByCountry) p.contracts.itByCountry = {};
-            // グローバル契約がある場合は国別のデフォルト値として引き継ぐ
-            const _cMapC = { 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' };
-            let activeCountries = [...new Set(p.stores.map(s => _cMapC[s.regionKey]).filter(Boolean))];
-            activeCountries.forEach(country => {
-                ['logByCountry', 'itByCountry'].forEach(key => {
-                    if (!p.contracts[key][country]) {
-                        let secKey = key === 'logByCountry' ? 'log' : 'it';
-                        // 同国優先、なければグローバル契約を継承
-                        let globalId = key === 'logByCountry' ? p.contracts.logistics : p.contracts.it;
-                        let candidates = companies.filter(c => c.sector === secKey && !c.isBankrupt);
-                        let domestic = candidates.filter(c => c.country === country);
-                        let pool = domestic.length > 0 ? domestic : candidates;
-                        if (globalId && candidates.find(c => c.id === globalId)) {
-                            p.contracts[key][country] = globalId;
-                        } else if (pool.length > 0) {
-                            p.contracts[key][country] = pool[Math.floor(Math.random() * pool.length)].id;
+            companies.forEach(c => {
+                if (c.sector !== 'coffee' || c.isBankrupt) return;
+                if (!c.contracts) c.contracts = { logistics: null, it: null, insurance: {}, logByCountry: {}, itByCountry: {} };
+                if (!c.contracts.insurance || typeof c.contracts.insurance !== 'object') c.contracts.insurance = {};
+                if (!c.contracts.logByCountry) c.contracts.logByCountry = {};
+                if (!c.contracts.itByCountry) c.contracts.itByCountry = {};
+                // グローバル契約がある場合は国別のデフォルト値として引き継ぐ
+                const _cMapC = { 'TOKYO': 'JP', 'OSAKA': 'JP', 'USA': 'USA', 'CHINA': 'CHINA', 'UK': 'UK', 'KOREA': 'KOREA', 'AUSTRALIA': 'AUS', 'CANADA': 'CAN', 'FRANCE': 'FRA', 'GERMANY': 'GER', 'INDIA': 'IND' };
+                let activeCountries = [...new Set(c.stores.map(s => _cMapC[s.regionKey]).filter(Boolean))];
+                activeCountries.forEach(country => {
+                    ['logByCountry', 'itByCountry'].forEach(key => {
+                        if (!c.contracts[key][country]) {
+                            let secKey = key === 'logByCountry' ? 'log' : 'it';
+                            // 同国優先、なければグローバル契約を継承
+                            let globalId = key === 'logByCountry' ? c.contracts.logistics : c.contracts.it;
+                            let candidates = companies.filter(x => x.sector === secKey && !x.isBankrupt);
+                            let domestic = candidates.filter(x => x.country === country);
+                            let pool = domestic.length > 0 ? domestic : candidates;
+                            if (globalId && candidates.find(x => x.id === globalId)) {
+                                c.contracts[key][country] = globalId;
+                            } else if (pool.length > 0) {
+                                c.contracts[key][country] = pool[Math.floor(Math.random() * pool.length)].id;
+                            }
                         }
-                    }
+                    });
                 });
             });
         }
