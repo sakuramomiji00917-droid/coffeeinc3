@@ -2503,6 +2503,19 @@
         window.executeTurn = function () {
             if (isGameOver) return;
             week++;
+            window._aiTobThisWeek = 0;
+            companies.forEach(c => {
+                if (c._payMgmtFee && c.id !== 'player') {
+                    let royalty = Math.floor(c.marketCap * 0.002 * 0.20);
+                    // AI子会社はマイナス現金のまま死ぬことがあるので少し余裕を持たせる
+                    if (c.cash >= royalty && royalty > 0) {
+                        c.cash -= royalty;
+                        companies[0].cash += royalty;
+                        companies[0].qNet = (companies[0].qNet || 0) + royalty;
+                        window._pBrandRoyalty = (window._pBrandRoyalty || 0) + royalty;
+                    }
+                }
+            });
 
             // ═══ 経済サイクル更新 ═══
             window.advanceEconCycle();
@@ -4877,6 +4890,8 @@
 
                             if (sharesToBuy > 0 && c.cash >= totalCost * 0.5) {
                                 // TOB宣言ニュースを必ず出す
+                                if (window._aiTobThisWeek >= 1) return;
+                                window._aiTobThisWeek++;
                                 addLog(`【TOB宣言】${c.name.replace(/\[.*?\]\s*/,'')} が ${tgt.name.replace(/\[.*?\]\s*/,'')} に対して株式公開買付を宣言しました！（プレミアム +${premiumPct}% / 決着まで4週間）`, 'alert', 'M&A');
                                 tgt.activeTOB_v2 = {
                                     bidder: c.id,
@@ -5188,6 +5203,8 @@
                                         if (Math.random() < 0.3) {
                                             addLog(`【内部情報】${c.name.replace(/\[.*?\]\s*/, '')} の取締役会にて、買収案が否決されました。`, 'normal', 'M&A');
                                         } else {
+                                            if (window._aiTobThisWeek >= 1) return;
+                                            window._aiTobThisWeek++;
                                             target.activeTOB_v2 = { bidder: c.id, price: premiumPrice, targetShares: sharesToBuy, startWeek: week, deadline: week + 4 };
                                             c._lastTOBWeek = week;
                                             let pPct = Math.round((premiumPrice / target.stockPrice - 1) * 100);
@@ -6811,6 +6828,8 @@
                                         }
                                     }
                                     if (!tgt.activeTOB_v2) {
+                                        if (window._aiTobThisWeek >= 1) return;
+                                        window._aiTobThisWeek++;
                                         tgt.activeTOB_v2 = { bidder: c.id, price, targetShares: sharesNeeded, startWeek: week, deadline: week + 4, premiumPct: prem };
                                         addLog(`【TOB発議】株主総会可決で${_cn}が${tgt.name.replace(/\[.*?\]\s*/g,'')}にTOB開始！`, 'alert', 'M&A');
                                     }
@@ -7033,6 +7052,50 @@
                     }
                 });
             }
+
+            // ── AIの高度なホールディングス戦略（子会社投資・吸収・売却） ──
+            if (window._difficulty && (window._difficulty.name === 'Hard' || window._difficulty.name === 'Real')) {
+                companies.forEach(ai => {
+                    if (ai.id !== 'player' && !ai.isBankrupt && ai.cash > 0) {
+                        let subs = companies.filter(c => c.parent === ai.id && !c.isBankrupt);
+                        subs.forEach(s => {
+                            if (Math.random() < 0.05) {
+                                // 1. 吸収合併
+                                if (s.sector === ai.sector || Math.random() < 0.3) {
+                                    ai.cash += s.cash;
+                                    ai.stores = ai.stores.concat(s.stores);
+                                    ai.marketCap += s.marketCap;
+                                    ai.shares += Math.floor(s.shares / 2);
+                                    s.isBankrupt = true;
+                                    s.cash = 0; s.stockPrice = 1;
+                                    addLog(`【AI吸収合併】${ai.name.replace(/\[.*?\]\s*/g,'')} が子会社 ${s.name.replace(/\[.*?\]\s*/g,'')} を完全吸収し、巨大化しました！`, 'alert', 'M&A');
+                                } 
+                                // 2. スピンオフ売却
+                                else if (s.stockPrice > 500 && Math.random() < 0.5) { 
+                                    let gain = Math.floor(s.marketCap * 0.8);
+                                    ai.cash += gain;
+                                    s.parent = null;
+                                    s.shareholders[ai.id] = 0;
+                                    s.shareholders['market'] = s.shares;
+                                    addLog(`【AI事業売却】${ai.name.replace(/\[.*?\]\s*/g,'')} が子会社 ${s.name.replace(/\[.*?\]\s*/g,'')} を市場にスピンオフ売却！巨額の利益を得ました。`, 'news', 'M&A');
+                                }
+                                // 3. 資金援助・バリューアップ
+                                else if (ai.cash > ai.marketCap * 0.1) {
+                                    let invest = Math.floor(ai.cash * 0.2);
+                                    ai.cash -= invest;
+                                    s.cash += invest;
+                                    s.stockPrice = Math.floor(s.stockPrice * 1.1);
+                                    if (s.sector === 'coffee' && s.stores.length < 15) {
+                                        s.stores.push(new Store(`[AI支援] ${s.location||'新規'}`, 500, 1000, null, 'ai_prop', 'JP', 'AI Area', 0));
+                                        addLog(`【AIグループ強化】${ai.name.replace(/\[.*?\]\s*/g,'')} の資金援助により、子会社 ${s.name.replace(/\[.*?\]\s*/g,'')} が出店を加速。`, 'normal', 'M&A');
+                                    }
+                                }
+                            }
+                        });
+                    }
+                });
+            }
+
             // 📊 子会社パフォーマンスレポート
             if (!isGameOver) {
                 let playerSubs = companies.filter(c => c.parent === 'player' && !c.isBankrupt && c.id !== 'player');
@@ -11313,6 +11376,9 @@ ${ds.desc}`)) {
                         <button class="btn-primary" style="font-size:12px; padding:10px;" onclick="subCmdBranch('${sub.id}')">🌍 支店設立</button>
                         <button class="btn-primary" style="font-size:12px; padding:10px;" onclick="subCmdTOB('${sub.id}')">🎯 買収命令</button>
                         <button class="btn-primary" style="font-size:12px; padding:10px;" onclick="subCmdBorrow('${sub.id}')">🏦 銀行借入</button>
+                        ${sub.sector !== 'coffee' ? `
+                        <button class="btn-primary" style="font-size:12px; padding:10px;" onclick="window.subActionMgmtFee('${sub.id}')">🤝 経営指導料 (売上20%)</button>
+                        ` : ''}
                         ${sub.sector === 'coffee' ? `
                         <button class="btn-primary" style="font-size:12px; padding:10px;" onclick="subCmdExpand('${sub.id}')">🏪 出店加速</button>
                         <button class="btn-primary" style="font-size:12px; padding:10px;" onclick="subCmdCloseUnprofit('${sub.id}')">📉 不採算閉鎖</button>
@@ -11626,6 +11692,16 @@ ${ds.desc}`)) {
                 addLog(`【資金回収】${sub.name.replace(/\[.*?\]\s*/, '')} から ¥${Math.floor(netAmt / 10000).toLocaleString()}万 を回収。`, 'success', 'M&A', 3); renderSubsidiaryList(); updateDashboard();
             }
         };
+        window.subActionMgmtFee = function (subId) {
+            let p = companies[0], sub = companies.find(c => c.id === subId);
+            if (!sub) return;
+            if (sub._payMgmtFee) return alert('既に経営指導契約を締結済みです。');
+            if (confirm(`【経営指導料の徴収】\n${sub.name.replace(/\[.*?\]\s*/g, '')} と経営指導契約を結び、毎ターン仮想売上の20%を徴収します（※子会社の資金成長が鈍化します）。\nよろしいですか？`)) {
+                sub._payMgmtFee = true;
+                addLog(`【グループ経営】${sub.name.replace(/\[.*?\]\s*/g, '')} から経営指導料（20%）の徴収を開始しました。`, 'success', '自社', 3);
+                renderSubsidiaryList();
+            }
+        };
         window.subActionRebrand = function (subId) {
             let p = companies[0], pName = p.name, sub = companies.find(c => c.id === subId);
             let cost = 50000000; // 統合費用¥5,000万
@@ -11655,6 +11731,13 @@ ${ds.desc}`)) {
         window.subActionMerge = function (subId) {
             let p = companies[0], subIdx = companies.findIndex(c => c.id === subId), sub = companies[subIdx];
             if (!sub) return;
+
+            if (sub.parent !== 'player') {
+                let parentCo = companies.find(c => c.id === sub.parent);
+                if (parentCo && !confirm(`【親会社の許可】\nこの企業は「${parentCo.name.replace(/\[.*?\]\s*/g, '')}」の子会社です。\n親会社の取締役会を通して手続きを行う必要があります。実行しますか？`)) {
+                    return;
+                }
+            }
 
             // 残株買取コスト計算（自社が100%未満の場合）
             let playerHolding = sub.shareholders['player'] || 0;
@@ -12267,6 +12350,13 @@ ${ds.desc}`)) {
         window.subCmdSell = function(subId) {
             let p = companies[0], sub = companies.find(c => c.id === subId);
             if (!sub) return;
+
+            if (sub.parent !== 'player') {
+                let parentCo = companies.find(c => c.id === sub.parent);
+                if (parentCo && !confirm(`【親会社の許可】\nこの企業は「${parentCo.name.replace(/\[.*?\]\s*/g, '')}」の子会社です。\n親会社の取締役会を通して手続きを行う必要があります。実行しますか？`)) {
+                    return;
+                }
+            }
             // AI企業から入札者を集める
             let bidders = companies.filter(b => b.id !== 'player' && b.id !== subId && !b.isBankrupt && b.cash > sub.marketCap * 0.3 && b.parent !== 'player');
             if (bidders.length === 0) return alert('現在、買い手が見つかりません。（十分な資金を持つAI企業がいません）');
