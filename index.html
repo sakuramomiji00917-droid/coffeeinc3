@@ -9700,7 +9700,7 @@ ${ds.desc}`)) {
                         '<div style="font-size:9px;color:var(--text-mut);">利率: ' + ((selBank.loanRate || 0.005) * 100).toFixed(2) + '%/週</div></div>' +
                         '<div style="background:#ecfdf5;padding:10px;border-radius:8px;border:1px solid #10b981;text-align:center;">' +
                         '<div style="font-size:10px;color:var(--text-mut);font-weight:bold;margin-bottom:3px;">あと借入可能</div>' +
-                        '<div style="font-size:14px;font-weight:900;color:#10b981;">¥' + Math.floor(canBorrow / 10000).toLocaleString() + '万</div>' +
+<div style="font-size:14px;font-weight:900;color:#10b981;">¥' + Math.floor(canBorrow / 10000).toLocaleString() + '万</div>' +
                         '<div style="font-size:9px;color:var(--text-mut);">' + Math.floor(canBorrow / 10000 / 100) + '00万単位</div></div>' +
                         '</div>';
                 })()}
@@ -10696,7 +10696,86 @@ ${ds.desc}`)) {
                 Object.keys(sectors).map(s => `<button class="tab-btn ${s === currentMarketSector ? 'active' : ''}" onclick="currentMarketSector='${s}';window._marketSelectedId=null;updateMarket()">${sectors[s].n}</button>`).join('') +
                 `</div>`;
 
-            // ── 選択企業の詳細カード ──
+            // ── 選択企業の詳細カード（トレーディング・ターミナル） ──
+            window._drawCandleChart = function(canvasId, ohlcvData, currentPrice) {
+                let canvas = document.getElementById(canvasId);
+                if(!canvas || !ohlcvData || ohlcvData.length === 0) return;
+                let ctx = canvas.getContext('2d');
+                let W = canvas.width = canvas.parentElement.clientWidth;
+                let H = canvas.height = canvas.parentElement.clientHeight || 210;
+                ctx.clearRect(0, 0, W, H);
+                
+                let data = ohlcvData.slice(-40); // 最新40週
+                let maxP = Math.max(...data.map(d=>d.h));
+                let minP = Math.min(...data.map(d=>d.l));
+                let range = maxP - minP || 1;
+                
+                let paddingT = 15, paddingB = 15;
+                let usableH = H - paddingT - paddingB;
+                
+                let yAxisW = 45; 
+                let chartW = W - yAxisW;
+                let candleW = Math.max(2, Math.floor((chartW - 10) / data.length) - 2);
+                
+                ctx.font = '9px Arial';
+                ctx.fillStyle = '#64748b';
+                ctx.strokeStyle = '#334155';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([2, 4]);
+                let gridSteps = 4;
+                for(let i=0; i<=gridSteps; i++) {
+                    let p = minP + range * (i/gridSteps);
+                    let y = paddingT + usableH * (1 - i/gridSteps);
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(chartW, y);
+                    ctx.stroke();
+                    
+                    ctx.fillText(`¥${Math.floor(p).toLocaleString()}`, chartW + 4, y + 3);
+                }
+                ctx.setLineDash([]);
+                
+                data.forEach((d, i) => {
+                    let x = Math.max(0, chartW - (data.length - i) * (candleW + 4));
+                    let yHigh = paddingT + usableH * (1 - (d.h - minP) / range);
+                    let yLow = paddingT + usableH * (1 - (d.l - minP) / range);
+                    let yOpen = paddingT + usableH * (1 - (d.o - minP) / range);
+                    let yClose = paddingT + usableH * (1 - (d.c - minP) / range);
+                    
+                    let color = d.c >= d.o ? '#ef4444' : '#10b981'; // 日本：陽線（+）赤、陰線（-）緑
+                    ctx.strokeStyle = color;
+                    ctx.fillStyle = color;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(x + candleW/2, yHigh);
+                    ctx.lineTo(x + candleW/2, yLow);
+                    ctx.stroke();
+                    
+                    let bodyTop = Math.min(yOpen, yClose);
+                    let bodyH = Math.max(1, Math.abs(yOpen - yClose));
+                    ctx.fillRect(x, bodyTop, candleW, bodyH);
+                });
+                
+                if (currentPrice !== undefined) {
+                    let currY = paddingT + usableH * (1 - (currentPrice - minP) / range);
+                    if (currY >= 0 && currY <= H) {
+                        ctx.strokeStyle = '#3b82f6';
+                        ctx.lineWidth = 1.5;
+                        ctx.setLineDash([4, 4]);
+                        ctx.beginPath();
+                        ctx.moveTo(0, currY);
+                        ctx.lineTo(chartW, currY);
+                        ctx.stroke();
+                        ctx.setLineDash([]);
+                        ctx.fillStyle = '#3b82f6';
+                        ctx.fillRect(chartW + 2, currY - 7, yAxisW - 2, 14);
+                        ctx.fillStyle = '#fff';
+                        ctx.fillText(`¥${Math.floor(currentPrice).toLocaleString()}`, chartW + 4, currY + 3);
+                    }
+                }
+            };
+
             let detailHtml = '';
             if (sel) {
                 let hist = (stockHistory.datasets?.[sel.id]) || [sel.stockPrice];
@@ -10704,72 +10783,89 @@ ${ds.desc}`)) {
                 let diff = sel.stockPrice - prevP;
                 let diffPct = prevP > 0 ? (diff / prevP) * 100 : 0;
                 let isUp = diff >= 0;
-                let priceColor = isUp ? '#10b981' : '#ef4444';
+                let priceColor = isUp ? '#ef4444' : '#10b981';
                 let sign = isUp ? '+' : '';
                 let cap = sel.marketCap >= 1e8 ? (sel.marketCap / 1e8).toFixed(1) + '億' : (sel.marketCap / 1e4).toLocaleString() + '万';
-                let divPerShare = (sel.id !== 'player' && sel.dividendRate > 0 && sel.lastQProfit > 0)
-                    ? '¥' + Math.floor((sel.lastQProfit * (sel.dividendRate / 100)) / sel.shares).toLocaleString()
-                    : '-';
-                let yearHigh = hist.length > 0 ? Math.max(...hist).toLocaleString() : sel.stockPrice.toLocaleString();
-                // 主要株主（marketを除く実株主のみ）
-                let _selFloat = window.getFloatShares(sel);
-                let topHolder = Object.keys(sel.shareholders)
-                    .filter(hid => hid !== 'market' && (sel.shareholders[hid] || 0) > 0)
-                    .map(hid => {
-                        let co = companies.find(cp => cp.id === hid);
-                        let label = hid === 'player' ? '自社' : hid === sel.id ? `🏦 金庫株` : co?.name.replace(/\[.*?\]\s*/, '').substring(0, 10) || hid;
-                        return { n: label, v: sel.shareholders[hid], isTreasury: hid === sel.id };
-                    })
-                    .sort((a, b) => b.v - a.v)[0];
-                let mainHolder = topHolder ? `${topHolder.n} (${sel.shares > 0 ? ((topHolder.v / sel.shares) * 100).toFixed(1) : '0'}%)` : '浮動株多数';
+                
                 let o = sel.shareholders['player'] || 0;
                 let pVal = o > 0 ? sel.stockPrice * o - (sel.playerTotalCost || 0) : 0;
                 let badge = window.getCountryBadge ? window.getCountryBadge(sel.country) : sel.country;
 
+                let _tProf = (sel.lastQProfit || 0) * 4;
+                let _tAssets = sel.cash + (sel.termDeposits ? sel.termDeposits.reduce((s,t)=>s+t.amount,0) : 0);
+                let _per = _tProf > 0 ? (sel.marketCap / _tProf).toFixed(1) : '---';
+                let _pbr = _tAssets > 0 ? (sel.marketCap / _tAssets).toFixed(2) : '---';
+                let _latestVolume = (sel._ohlcv && sel._ohlcv.length > 0) ? sel._ohlcv[sel._ohlcv.length - 1].v : Math.floor(sel.shares * 0.05);
+
+                let _needed = Math.floor(sel.shares * 0.51) + 1;
+                let _rem = _needed - o;
+                let _tobHtml = '';
+                if (sel.id !== 'player') {
+                    if (o >= _needed) {
+                        _tobHtml = `<div style="background:#f0fdf4; border:1px solid #10b981; padding:4px; border-radius:6px; text-align:center; font-size:10px; font-weight:bold; color:#10b981; margin-bottom:8px;">✅ 経営権取得済</div>`;
+                    } else if (o > 0) {
+                        _tobHtml = `<div style="background:#fffbeb; border:1px solid #f59e0b; padding:4px; border-radius:6px; text-align:center; margin-bottom:8px;">
+                            <div style="font-size:9px; color:#b45309; font-weight:bold;">TOB過半数まであと</div>
+                            <div style="font-size:12px; font-weight:900; color:#d97706;">${_rem.toLocaleString()} <span style="font-size:10px;">株</span></div>
+                        </div>`;
+                    }
+                }
+
+                let _pSrc = sel.stockPrice;
+                let _bookStr = `<table style="width:100%; font-size:11px; text-align:center; border-collapse:collapse; margin-top:0;">
+                    <tr style="color:#64748b; font-size:9px; border-bottom:1px solid #334155;"><th style="padding:2px 0;font-weight:normal;">売板(株)</th><th style="font-weight:normal;">価格</th><th style="font-weight:normal;">買板(株)</th></tr>
+                `;
+                for(let i=3; i>=1; i--) {
+                    let _pr = _pSrc + Math.floor(_pSrc * 0.02 * i);
+                    let _vol = Math.floor(_latestVolume * 0.15 * (Math.random()*0.5+0.5));
+                    _bookStr += `<tr><td style="color:#ef4444; padding:2px;">${_vol.toLocaleString()}</td><td style="color:#e2e8f0;font-weight:bold;">${_pr.toLocaleString()}</td><td></td></tr>`;
+                }
+                _bookStr += `<tr style="background:#1e293b; border-top:1px solid #334155; border-bottom:1px solid #334155;"><td></td><td style="font-weight:900; font-size:12px; color:#e2e8f0; padding:2px 0;">${_pSrc.toLocaleString()}</td><td></td></tr>`;
+                for(let i=1; i<=3; i++) {
+                    let _pr = _pSrc - Math.floor(_pSrc * 0.02 * i);
+                    if (_pr <= 0) break;
+                    let _vol = Math.floor(_latestVolume * 0.15 * (Math.random()*0.5+0.5));
+                    _bookStr += `<tr><td></td><td style="color:#e2e8f0;font-weight:bold;">${_pr.toLocaleString()}</td><td style="color:#10b981; padding:2px;">${_vol.toLocaleString()}</td></tr>`;
+                }
+                _bookStr += `</table>`;
+
                 detailHtml = `
-                <div class="card" style="margin:12px 0;padding:0;overflow:hidden;border:1.5px solid ${isUp ? '#10b981' : '#ef4444'};">
-                    <div style="background:linear-gradient(135deg,#0f172a,#1e293b);padding:18px 18px 14px;color:#fff;">
-                        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;">
+                <div class="card" style="margin:12px 0;padding:0;overflow:hidden;border:1.5px solid ${isUp ? '#ef4444' : '#10b981'};">
+                    <div style="background:linear-gradient(135deg,#0f172a,#1e293b);padding:14px;color:#fff;">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
                             <div>
                                 <div style="font-size:16px;font-weight:900;margin-bottom:2px;">${badge} ${sel.name.replace(/\[.*?\]\s*/, '')}</div>
-                                <div style="font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:1px;">${sectors[sel.sector]?.n || sel.sector}</div>
+                                <div style="font-size:11px;color:#94a3b8;font-weight:700;">${sectors[sel.sector]?.n || sel.sector}</div>
                             </div>
                             <div style="text-align:right;">
                                 <div style="font-size:24px;font-weight:900;color:${priceColor};">¥${sel.stockPrice.toLocaleString()}</div>
                                 <div style="font-size:12px;font-weight:900;color:${priceColor};">${sign}¥${Math.abs(diff).toLocaleString()} (${sign}${diffPct.toFixed(2)}%)</div>
                             </div>
                         </div>
-                        <div style="height:80px;position:relative;margin:10px 0 4px;"><canvas id="market-detail-chart"></canvas></div>
+                        <div style="display:flex; gap:12px; margin-top:8px;">
+                            <div style="flex:1; position:relative;">
+                                <div style="height:210px; width:100%; position:relative; background:#0f172a; border:1px solid #334155; border-radius:4px;"><canvas id="market-candle-chart"></canvas></div>
+                            </div>
+                            <div style="width:140px; flex-shrink:0; display:flex; flex-direction:column; gap:8px;">
+                                <div style="background:#0f172a; border:1px solid #334155; border-radius:4px; padding:4px;">
+                                    ${_bookStr}
+                                </div>
+                                ${_tobHtml}
+                                <div style="display:flex;justify-content:space-between;font-size:10px;color:#cbd5e1;border-bottom:1px solid #334155;padding-bottom:2px;"><span style="color:#94a3b8;">PER</span><b style="color:#fff;">${_per}倍</b></div>
+                                <div style="display:flex;justify-content:space-between;font-size:10px;color:#cbd5e1;border-bottom:1px solid #334155;padding-bottom:2px;"><span style="color:#94a3b8;">PBR</span><b style="color:#fff;">${_pbr}倍</b></div>
+                                <div style="display:flex;justify-content:space-between;font-size:10px;color:#cbd5e1;"><span style="color:#94a3b8;">週間出来高</span><b style="color:#fff;">${_latestVolume.toLocaleString()}</b></div>
+                            </div>
+                        </div>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;background:#fff;">
-                        <div style="padding:12px 16px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);">
-                            <div style="font-size:10px;color:#94a3b8;font-weight:700;margin-bottom:3px;">時価総額</div>
-                            <div style="font-size:14px;font-weight:900;">¥${cap}</div>
-                        </div>
-                        <div style="padding:12px 16px;border-bottom:1px solid var(--border);">
-                            <div style="font-size:10px;color:#94a3b8;font-weight:700;margin-bottom:3px;">配当</div>
-                            <div style="font-size:14px;font-weight:900;color:var(--gold);">${divPerShare}/株</div>
-                        </div>
-                        <div style="padding:12px 16px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);">
-                            <div style="font-size:10px;color:#94a3b8;font-weight:700;margin-bottom:3px;">一年来高値</div>
-                            <div style="font-size:14px;font-weight:900;">¥${yearHigh}</div>
-                        </div>
-                        <div style="padding:12px 16px;border-bottom:1px solid var(--border);">
-                            <div style="font-size:10px;color:#94a3b8;font-weight:700;margin-bottom:3px;">主要株主</div>
-                            <div style="font-size:12px;font-weight:900;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${mainHolder}</div>
-                        </div>
-                        <div style="padding:12px 16px;border-right:1px solid var(--border);">
-                            <div style="font-size:10px;color:#94a3b8;font-weight:700;margin-bottom:3px;">発行済株数</div>
-                            <div style="font-size:14px;font-weight:900;">${sel.shares.toLocaleString()}</div>
-                        </div>
-                        <div style="padding:12px 16px;">
+                    <div style="background:#f1f5f9;display:flex; border-top:1px solid var(--border);">
+                        <div style="padding:12px 16px; flex:1; border-right:1px solid var(--border);">
                             <div style="font-size:10px;color:#94a3b8;font-weight:700;margin-bottom:3px;">自社保有</div>
                             <div style="font-size:14px;font-weight:900;color:var(--primary);">${o > 0 ? o.toLocaleString() + '株 (' + (pVal >= 0 ? '+' : '') + Math.floor(pVal / 10000).toLocaleString() + '万)' : '-'}</div>
                         </div>
-                    </div>
-                    <div style="padding:12px 16px;background:#f9fafb;display:flex;gap:8px;">
-                        <button class="btn-primary" style="flex:1;padding:10px;border-radius:10px;font-weight:900;" onclick="openTradeModal('${sel.id}')">📊 株式取引 / TOB</button>
-                        <button class="btn-outline" style="padding:10px 14px;border-radius:10px;font-weight:900;" onclick="openCompanyModal('${sel.id}')">詳細</button>
+                        <div style="padding:12px 16px; flex:2; display:flex; gap:8px; align-items:center;">
+                            <button class="btn-primary" style="flex:2;padding:10px;border-radius:6px;font-size:13px;font-weight:900;" onclick="openTradeModal('${sel.id}')">⚡ 取引 / 予約 (指値・成行)</button>
+                            ${sel.id !== 'player' ? `<button class="btn-outline" style="flex:1;padding:10px;border-radius:6px;font-size:12px;font-weight:900;" onclick="openCompanyModal('${sel.id}')">詳細・方針</button>` : ''}
+                        </div>
                     </div>
                 </div>`;
             }
@@ -10793,7 +10889,7 @@ ${ds.desc}`)) {
                 let prevP = hist.length > 1 ? hist[hist.length - 2] : c.stockPrice;
                 let diffPct = prevP > 0 ? ((c.stockPrice - prevP) / prevP) * 100 : 0;
                 let isUp = c.stockPrice >= prevP;
-                let priceColor = isUp ? '#10b981' : '#ef4444';
+                let priceColor = isUp ? '#0284c7' : '#ef4444';
                 let sign = isUp ? '+' : '';
                 let cap = c.marketCap >= 1e8 ? (c.marketCap / 1e8).toFixed(1) + '億' : (c.marketCap / 1e4).toLocaleString() + '万';
                 let isSel = c.id === window._marketSelectedId;
@@ -10856,41 +10952,9 @@ ${ds.desc}`)) {
             // 詳細カードのチャートを描画
             if (sel) {
                 setTimeout(() => {
-                    let ctx = document.getElementById('market-detail-chart')?.getContext('2d'); if (!ctx) return;
-                    if (window._marketDetailChart) window._marketDetailChart.destroy();
-                    let history = (stockHistory.datasets?.[sel.id]) || [sel.stockPrice];
-                    if (history.length <= 2) history = [Math.floor(sel.stockPrice * 0.95), Math.floor(sel.stockPrice * 1.02), sel.stockPrice];
-                    let recentData = history.slice(-20);
-                    let isUp = recentData[recentData.length - 1] >= (recentData[recentData.length - 2] || recentData[0]);
-                    let lineColor = isUp ? '#10b981' : '#ef4444';
-                    let gradient = ctx.createLinearGradient(0, 0, 0, 80);
-                    gradient.addColorStop(0, lineColor + '55');
-                    gradient.addColorStop(1, lineColor + '00');
-                    let minVal = Math.min(...recentData), maxVal = Math.max(...recentData);
-                    let pad = (maxVal - minVal) * 0.15 || minVal * 0.02;
-                    window._marketDetailChart = new Chart(ctx, {
-                        type: 'line',
-                        data: {
-                            labels: recentData.map((_, i) => i === recentData.length - 1 ? '現在' : `${recentData.length - 1 - i}週前`),
-                            datasets: [{ data: recentData, borderColor: lineColor, borderWidth: 2.5, pointRadius: 0, pointHoverRadius: 4, fill: true, backgroundColor: gradient, tension: 0.4 }]
-                        },
-                        options: {
-                            responsive: true, maintainAspectRatio: false,
-                            interaction: { mode: 'index', intersect: false },
-                            plugins: {
-                                legend: { display: false },
-                                tooltip: {
-                                    enabled: true, backgroundColor: 'rgba(15,23,42,0.95)',
-                                    callbacks: { label: ctx => ('¥' + ctx.parsed.y.toLocaleString()) }
-                                }
-                            },
-                            scales: {
-                                x: { display: false },
-                                y: { display: false, min: minVal - pad, max: maxVal + pad }
-                            },
-                            animation: { duration: 300 }
-                        }
-                    });
+                    if (sel._ohlcv && window._drawCandleChart) {
+                        window._drawCandleChart('market-candle-chart', sel._ohlcv, sel.stockPrice);
+                    }
                 }, 50);
             }
         };
@@ -12811,104 +12875,6 @@ ${ds.desc}`)) {
                 companies.forEach(c => { if (c.id !== cid && c.shareholders[cid] > 0) { portCount++; portfolioHtml += `<div class="flex-between" style="border-bottom:1px dashed var(--border);padding:10px 0;font-size:13px;"><span>📈 ${c.name.replace(/\[.*?\]\s*/, '').substring(0, 18)}</span><span style="font-weight:bold;color:var(--primary);">¥${(c.stockPrice * c.shareholders[cid] / 10000).toLocaleString()}万</span></div>`; } });
                 if (portCount === 0) portfolioHtml = '<div style="color:var(--text-mut);text-align:center;padding:15px;">保有株式なし</div>';
 
-                // ================= 最新株価指標と板情報・ローソク足チャートの生成 =================
-                window._drawCandleChart = function(canvasId, ohlcvData) {
-                    let canvas = document.getElementById(canvasId);
-                    if(!canvas || !ohlcvData || ohlcvData.length === 0) return;
-                    let ctx = canvas.getContext('2d');
-                    let W = canvas.width = canvas.parentElement.clientWidth;
-                    let H = canvas.height = 160;
-                    ctx.clearRect(0, 0, W, H);
-                    
-                    let maxP = Math.max(...ohlcvData.map(d=>d.h));
-                    let minP = Math.min(...ohlcvData.map(d=>d.l));
-                    let range = maxP - minP || 1;
-                    
-                    let padding = 10;
-                    let usableH = H - padding * 2;
-                    let candleW = Math.max(2, Math.floor((W - 20) / 20) - 2);
-                    
-                    ohlcvData.slice(-20).forEach((d, i) => {
-                        let x = 10 + i * (candleW + 4);
-                        let yHigh = padding + usableH * (1 - (d.h - minP) / range);
-                        let yLow = padding + usableH * (1 - (d.l - minP) / range);
-                        let yOpen = padding + usableH * (1 - (d.o - minP) / range);
-                        let yClose = padding + usableH * (1 - (d.c - minP) / range);
-                        
-                        let color = d.c >= d.o ? '#ef4444' : '#10b981'; // 日本：陽線（+）赤、陰線（-）緑
-                        ctx.strokeStyle = color;
-                        ctx.fillStyle = color;
-                        
-                        ctx.beginPath();
-                        ctx.moveTo(x + candleW/2, yHigh);
-                        ctx.lineTo(x + candleW/2, yLow);
-                        ctx.stroke();
-                        
-                        let bodyTop = Math.min(yOpen, yClose);
-                        let bodyH = Math.max(1, Math.abs(yOpen - yClose));
-                        ctx.fillRect(x, bodyTop, candleW, bodyH);
-                    });
-                };
-
-                let _tProf = (target.lastQProfit || 0) * 4;
-                let _tAssets = target.cash + (target.termDeposits ? target.termDeposits.reduce((s,t)=>s+t.amount,0) : 0);
-                let _per = _tProf > 0 ? (target.marketCap / _tProf).toFixed(1) : '---';
-                let _pbr = _tAssets > 0 ? (target.marketCap / _tAssets).toFixed(2) : '---';
-                let _latestVolume = (target._ohlcv && target._ohlcv.length > 0) ? target._ohlcv[target._ohlcv.length - 1].v : Math.floor(target.shares * 0.05);
-
-                let _needed = Math.floor(target.shares * 0.51) + 1;
-                let _curr = target.shareholders['player'] || 0;
-                let _rem = _needed - _curr;
-                let _tobHtml = '';
-                if (_curr > 0 && target.id !== 'player') {
-                    if (_curr >= _needed) {
-                        _tobHtml = `<div style="background:#f0fdf4; border:1px solid #16a34a; padding:8px; border-radius:8px; text-align:center; font-size:12px; font-weight:bold; color:#16a34a; margin-bottom:12px;">✅ 経営権（過半数）取得済み</div>`;
-                    } else {
-                        _tobHtml = `<div style="background:#fffbeb; border:1px solid #f59e0b; padding:8px; border-radius:8px; text-align:center; margin-bottom:12px;">
-                            <div style="font-size:10px; color:#b45309; font-weight:bold; margin-bottom:2px;">敵対的TOB・過半数まで あと</div>
-                            <div style="font-size:16px; font-weight:900; color:#d97706;">${_rem.toLocaleString()} <span style="font-size:12px;">株</span></div>
-                            <div style="font-size:10px; color:#b45309; margin-top:2px;">(時価換算: 約¥${Math.floor(_rem * target.stockPrice / 10000).toLocaleString()}万)</div>
-                        </div>`;
-                    }
-                }
-
-                let _pSrc = target.stockPrice;
-                let _bookStr = `<table style="width:100%; font-size:11px; text-align:center; border-collapse:collapse; margin-top:8px;">
-                    <tr style="color:#64748b; font-size:9px; border-bottom:1px solid var(--border);"><th style="padding:4px 0;">売気配(株)</th><th>予約価格</th><th>買気配(株)</th></tr>
-                `;
-                for(let i=3; i>=1; i--) {
-                    let _pr = _pSrc + Math.floor(_pSrc * 0.02 * i);
-                    let _vol = Math.floor(_latestVolume * 0.15 * (Math.random()*0.5+0.5));
-                    _bookStr += `<tr><td style="color:#ef4444; padding:2px;">${_vol.toLocaleString()}</td><td style="font-weight:bold;">${_pr.toLocaleString()}</td><td></td></tr>`;
-                }
-                _bookStr += `<tr style="background:#f1f5f9; border-top:1px solid var(--border); border-bottom:1px solid var(--border);"><td></td><td style="font-weight:900; font-size:13px; padding:3px 0;">${_pSrc.toLocaleString()}</td><td></td></tr>`;
-                for(let i=1; i<=3; i++) {
-                    let _pr = _pSrc - Math.floor(_pSrc * 0.02 * i);
-                    if (_pr <= 0) break;
-                    let _vol = Math.floor(_latestVolume * 0.15 * (Math.random()*0.5+0.5));
-                    _bookStr += `<tr><td></td><td style="font-weight:bold;">${_pr.toLocaleString()}</td><td style="color:#10b981; padding:2px;">${_vol.toLocaleString()}</td></tr>`;
-                }
-                _bookStr += `</table>`;
-
-                let _marketDataHtml = `
-                <div class="card" style="margin:0;padding:15px;border-left:4px solid #3b82f6;">
-                    <h5 style="margin:0 0 10px 0;font-size:14px;">📈 市場データ・注文板</h5>
-                    ${_tobHtml}
-                    <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:14px; border-bottom:1px solid var(--border); padding-bottom:8px;">
-                        <div style="text-align:center;"><div style="font-size:10px; color:#64748b;">PER (予想)</div><div style="font-weight:bold;">${_per} 倍</div></div>
-                        <div style="text-align:center;"><div style="font-size:10px; color:#64748b;">PBR (実績)</div><div style="font-weight:bold;">${_pbr} 倍</div></div>
-                        <div style="text-align:center;"><div style="font-size:10px; color:#64748b;">週間取引高</div><div style="font-weight:bold;">${_latestVolume.toLocaleString()}</div></div>
-                    </div>
-                    <div style="width:100%; height:160px; position:relative; margin-bottom:15px;"><canvas id="candle-chart-target"></canvas></div>
-                    <div style="font-size:11px; color:var(--text-mut); font-weight:bold; margin-bottom:4px;">📊 予想気配値 (参考)</div>
-                    <div style="background:#fff; border:1px solid var(--border); border-radius:8px; padding:4px;">
-                        ${_bookStr}
-                    </div>
-                    ${target.id !== 'player' && target.isPublic ? `<button class="btn-primary btn-large" style="width:100%; margin-top:15px; font-weight:900;" onclick="openTradeModal('${target.id}')">株取引 (指値予約/成行)</button>` : ''}
-                </div>`;
-                // =========================================================
-
-
                 document.getElementById('company-modal-desc').innerHTML = `
                 <div style="display:flex;flex-wrap:wrap;gap:20px;align-items:start;">
                     <div class="card" style="flex:1 1 320px;margin:0;padding:20px;border-top:5px solid var(--primary);box-shadow:var(--shadow-md);">
@@ -12935,7 +12901,6 @@ ${ds.desc}`)) {
                         </div>
                     </div>
                     <div style="flex:1 1 240px;display:flex;flex-direction:column;gap:12px;">
-                        ${target.isPublic ? _marketDataHtml : ''}
                         <div class="card" style="margin:0;padding:15px;border-left:4px solid #8b5cf6;"><h5 style="margin:0 0 10px 0;font-size:14px;">🏢 所有不動産 (${allProps.length})</h5><div style="max-height:150px;overflow-y:auto;padding-right:5px;">${propHtml}</div></div>
                         <div class="card" style="margin:0;padding:15px;border-left:4px solid var(--warning);"><h5 style="margin:0 0 10px 0;font-size:14px;">🤝 傘下企業 (${subs.length})</h5><div style="max-height:150px;overflow-y:auto;padding-right:5px;">${subHtml}</div></div>
                         <div class="card" style="margin:0;padding:15px;border-left:4px solid var(--success);"><h5 style="margin:0 0 10px 0;font-size:14px;">💼 保有株 (${portCount})</h5><div style="padding-right:5px;">${portfolioHtml}</div></div>
@@ -13027,7 +12992,6 @@ ${ds.desc}`)) {
                 </div>`;
 
                 setTimeout(() => {
-                    if (target.isPublic && target._ohlcv) window._drawCandleChart('candle-chart-target', target._ohlcv);
                     let ctx = document.getElementById('shareholder-chart');
                     if (!ctx) return;
                     ctx = ctx.getContext('2d');
