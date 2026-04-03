@@ -2107,6 +2107,31 @@
                 else if (type === 'news') priority = 2;
                 else priority = 1;
             }
+
+            // プレイヤーに関連薄いマイナー企業イベントの優先度を下げる（新聞の視認性向上）
+            let p = companies && companies.length > 0 ? companies[0] : null;
+            if (p && category !== '経済' && category !== '政治' && priority >= 2) {
+                let isRelated = false;
+                if (msg.includes(p.name) || msg.includes('自社') || msg.includes('プレイヤー')) isRelated = true;
+                if (!isRelated && p._logContract) {
+                    let logC = companies.find(c => c.id === p._logContract);
+                    if (logC && msg.includes(logC.name.replace(/\[.*?\]\s*/g, ''))) isRelated = true;
+                }
+                if (!isRelated && p._insContract) {
+                    let insC = companies.find(c => c.id === p._insContract);
+                    if (insC && msg.includes(insC.name.replace(/\[.*?\]\s*/g, ''))) isRelated = true;
+                }
+                if (!isRelated) {
+                    let subs = companies.filter(c => c.parent === 'player');
+                    if (subs.some(sub => msg.includes(sub.name.replace(/\[.*?\]\s*/g, '')))) isRelated = true;
+                }
+                
+                if (!isRelated && !msg.includes('TOB') && !msg.includes('買収') && !msg.includes('倒産')) {
+                    priority = Math.max(1, priority - 2); // 関係ない企業の値上げや店舗開設は優先度を下げる
+                } else if (isRelated) {
+                    priority = Math.max(priority, 4); // 関連ニュースは優先度を上げる
+                }
+            }
             let thisWeekStr = window._weekStr(week);
             window.logHistory.unshift({ week: thisWeekStr, msg: msg, type: type, category: category, priority: priority, _turnId: window._currentTurnId || 0 });
             if (window.logHistory.length > 500) window.logHistory.pop();
@@ -2287,190 +2312,94 @@
         // 📰 週次ニュース画面（Coffee Inc 2スタイル）
         // ==========================================
         // ── 週次ニュース画面タブ状態 ──
+        // ── 週次ニュース画面タブ状態（不要になるため削除・プレースホルダー） ──
         window._weeklyNewsTab = 'すべて';
 
         window.showWeeklyNewsScreen = function (weekStr, tabOverride, turnId) {
-            if (tabOverride) window._weeklyNewsTab = tabOverride;
-            let activeTab = window._weeklyNewsTab;
             let _tid = turnId || window._lastNewsTurnId || window._currentTurnId || 0;
-            window._lastNewsTurnId = _tid; // タブ切替用に保存
+            window._lastNewsTurnId = _tid;
             let allLogs = window.logHistory.filter(l => l._turnId === _tid && !l.category.startsWith('_'));
             let modalsArea = document.getElementById('modals-area');
             let existing = document.getElementById('weekly-news-screen');
             if (existing) existing.remove();
 
-            // カテゴリ色（ライト版）
-            const catColorMap = {
-                '経済': { bg: '#dbeafe', color: '#1d4ed8', bar: '#3b82f6' },
-                '政治': { bg: '#ede9fe', color: '#6d28d9', bar: '#7c3aed' },
-                '自社': { bg: '#d1fae5', color: '#065f46', bar: '#059669' },
-                'M&A': { bg: '#dbeafe', color: '#1e40af', bar: '#2563eb' },
-                '競合': { bg: '#ffedd5', color: '#9a3412', bar: '#ea580c' },
-                '不動産': { bg: '#dbeafe', color: '#1d4ed8', bar: '#3b82f6' },
-                '店舗': { bg: '#d1fae5', color: '#065f46', bar: '#059669' },
-                '財務': { bg: '#dbeafe', color: '#1d4ed8', bar: '#3b82f6' },
-                '物価': { bg: '#fef3c7', color: '#92400e', bar: '#f59e0b' },
-                '🔴緊急': { bg: '#fee2e2', color: '#b91c1c', bar: '#dc2626' },
-            };
-            const getColor = (cat) => catColorMap[cat] || { bg: '#f3f4f6', color: '#374151', bar: '#6b7280' };
-            const typeBorderMap = { alert: '#dc2626', success: '#059669', news: '#3b82f6', normal: '#6b7280', warning: '#d97706' };
-            const typeLabel = { alert: '⚠ URGENT', success: '◎ POSITIVE', news: '○ INFO', normal: '○ INFO', warning: '△ WARNING' };
+            let p = companies && companies.length > 0 ? companies[0] : null;
 
-            // カテゴリ集計
-            let cats = ['すべて', '🔴緊急'];
-            let seen = new Set();
-            allLogs.forEach(l => { if (!seen.has(l.category)) { cats.push(l.category); seen.add(l.category); } });
+            let myNews = [];
+            let aiStrategy = [];
+            let globalEco = [];
 
-            // フィルター後ログ
-            let logs = activeTab === 'すべて' ? allLogs
-                : activeTab === '🔴緊急' ? allLogs.filter(l => l.type === 'alert')
-                    : allLogs.filter(l => l.category === activeTab);
+            allLogs.forEach(log => {
+                let isRelated = false;
+                if (p) {
+                    if (log.msg.includes(p.name) || log.msg.includes('自社') || log.msg.includes('プレイヤー')) isRelated = true;
+                    if (!isRelated && p._logContract && log.msg.includes(companies.find(c => c.id === p._logContract)?.name.replace(/\[.*?\]\s*/g, '') || 'XXX')) isRelated = true;
+                    if (!isRelated && p._insContract && log.msg.includes(companies.find(c => c.id === p._insContract)?.name.replace(/\[.*?\]\s*/g, '') || 'XXX')) isRelated = true;
+                    let subs = companies.filter(c => c.parent === 'player');
+                    if (subs.some(sub => log.msg.includes(sub.name.replace(/\[.*?\]\s*/g, '')))) isRelated = true;
+                }
 
-            // トップニュース（最高優先度1件のみ。残りは時系列順＝新しい順）
-            let _sorted = [...logs].sort((a, b) => (b.priority || 1) - (a.priority || 1));
-            let topLog = _sorted[0] || null;
-            // トップ以外は元の時系列順（logHistoryの挿入順 = 新しい順）を維持
-            let secondary = logs.filter(l => l !== topLog).slice(0, 2);
-            let minor = logs.filter(l => l !== topLog && !secondary.includes(l));
+                if (isRelated || log.category === '自社' || log.category === '店舗') {
+                    if (log.priority >= 2) myNews.push(log);
+                } else if (log.category === '経済' || log.category === '政治' || log.category === '物価') {
+                    if (log.priority >= 3) globalEco.push(log); 
+                } else {
+                    if (log.priority >= 3) aiStrategy.push(log);
+                }
+            });
 
-            // タブHTML
-            let tabsHtml = cats.map(cat => {
-                let cnt = cat === 'すべて' ? allLogs.length : cat === '🔴緊急' ? allLogs.filter(l => l.type === 'alert').length : allLogs.filter(l => l.category === cat).length;
-                let isActive = cat === activeTab;
-                let isDanger = cat === '🔴緊急';
-                let activeStyle = isDanger
-                    ? 'color:#dc2626;border-bottom:3px solid #dc2626;'
-                    : 'color:#2563eb;border-bottom:3px solid #2563eb;';
-                return `<button onclick="window.showWeeklyNewsScreen('${weekStr}','${cat}')"
-                    style="flex-shrink:0;padding:10px 16px;border:none;cursor:pointer;font-size:12px;font-weight:700;
-                    background:transparent;transition:all 0.15s;
-                    color:${isActive ? (isDanger ? '#dc2626' : '#2563eb') : (isDanger ? '#ef4444' : '#6b7280')};
-                    border-bottom:${isActive ? '3px solid ' + (isDanger ? '#dc2626' : '#2563eb') : '3px solid transparent'};
-                    ">${cat}${cnt > 0 ? ` <span style="font-size:10px;opacity:0.7;">(${cnt})</span>` : ''}</button>`;
-            }).join('');
+            myNews.sort((a,b)=>b.priority - a.priority);
+            aiStrategy.sort((a,b)=>b.priority - a.priority);
+            globalEco.sort((a,b)=>b.priority - a.priority);
 
-            // 記事HTML生成
-            const buildCard = (log, size) => {
-                if (!log) return '';
-                let bar = typeBorderMap[log.type] || '#6b7280';
-                let cc = getColor(log.category);
-                let tlabel = typeLabel[log.type] || '○ INFO';
+            const buildItem = (log) => {
+                let isAlert = log.type === 'alert';
+                let isSucc = log.type === 'success';
+                let isWarn = log.type === 'warning';
+                let color = isAlert ? '#ef4444' : isSucc ? '#10b981' : isWarn ? '#f59e0b' : '#6b7280';
+                let icon = isAlert ? '⚠️' : isSucc ? '✨' : isWarn ? '⚡' : '📰';
                 let msgClean = log.msg.replace(/【.*?】/, '').trim();
-                let msgCat = log.msg.match(/【(.*?)】/)?.[1] || log.category;
-
-                if (size === 'headline') return `
-                    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:18px;
-                        margin-bottom:14px;border-left:4px solid ${bar};
-                        box-shadow:0 1px 4px rgba(0,0,0,0.04);
-                        animation:wkItemIn 0.4s ease forwards;opacity:0;transform:translateY(10px);">
-                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-                            <span style="background:${cc.bg};color:${cc.color};font-size:10px;font-weight:700;
-                                padding:3px 8px;border-radius:4px;letter-spacing:0.5px;">${log.category}</span>
-                            <span style="font-size:10px;color:#9ca3af;font-weight:600;">${tlabel}</span>
-                        </div>
-                        <div style="font-size:19px;font-weight:700;line-height:1.4;color:#111827;
-                            font-family:'Playfair Display','Noto Serif JP',Georgia,serif;margin-bottom:8px;">
-                            ${msgClean}
-                        </div>
-                        <div style="font-size:11px;color:#9ca3af;">${msgCat}</div>
-                    </div>`;
-
-                if (size === 'secondary') return `
-                    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;
-                        border-top:3px solid ${bar};box-shadow:0 1px 4px rgba(0,0,0,0.04);
-                        animation:wkItemIn 0.4s ease forwards;opacity:0;transform:translateY(8px);animation-delay:0.1s;">
-                        <span style="display:inline-block;background:${cc.bg};color:${cc.color};font-size:10px;font-weight:700;
-                            padding:2px 8px;border-radius:4px;margin-bottom:8px;">${log.category}</span>
-                        <div style="font-size:13px;font-weight:700;color:#1f2937;line-height:1.4;
-                            font-family:'Noto Serif JP',Georgia,serif;">
-                            ${msgClean}
-                        </div>
-                    </div>`;
-
-                // minor
                 return `
-                    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;
-                        padding:10px 14px;margin-bottom:8px;
-                        display:flex;gap:10px;align-items:flex-start;
-                        box-shadow:0 1px 3px rgba(0,0,0,0.03);
-                        animation:wkItemIn 0.4s ease forwards;opacity:0;transform:translateY(6px);animation-delay:0.15s;">
-                        <div style="width:3px;align-self:stretch;background:${bar};border-radius:2px;flex-shrink:0;margin-top:2px;"></div>
-                        <div style="flex:1;">
-                            <span style="display:inline-block;background:${cc.bg};color:${cc.color};font-size:10px;font-weight:700;
-                                padding:1px 6px;border-radius:3px;margin-bottom:4px;">${log.category}</span>
-                            <div style="font-size:12px;color:#374151;line-height:1.5;
-                                font-family:'Noto Serif JP',Georgia,serif;">
-                                ${msgClean}
-                            </div>
-                        </div>
-                    </div>`;
+                <div style="padding:10px 12px; background:rgba(255,255,255,0.7); border-left:3px solid ${color}; margin-bottom:8px; border-radius:6px; box-shadow:0 1px 2px rgba(0,0,0,0.03); display:flex; gap:10px; align-items:flex-start;">
+                    <div style="font-size:14px; margin-top:2px;">${icon}</div>
+                    <div>
+                        <div style="font-size:10px; font-weight:700; color:${color}; margin-bottom:2px;">${log.category}</div>
+                        <div style="font-size:13px; font-weight:600; color:#111827; line-height:1.4;">${msgClean}</div>
+                    </div>
+                </div>`;
             };
 
-            let headline2col = '';
-            if (secondary.length > 0) {
-                headline2col = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
-                    ${secondary.map(l => buildCard(l, 'secondary')).join('')}
-                </div>`;
-            }
-            let minorHtml = minor.map(l => buildCard(l, 'minor')).join('');
-            let urgentCount = allLogs.filter(l => l.type === 'alert').length;
-            let emptyHtml = logs.length === 0 ? `<div style="text-align:center;padding:40px;color:#9ca3af;font-family:'Noto Serif JP',Georgia,serif;font-style:italic;">今週はこのカテゴリの記事がありません。</div>` : '';
+            let blocks = '';
+            if (myNews.length > 0) blocks += `<div style="margin-bottom:24px;"><div style="font-size:14px; font-weight:800; color:#065f46; margin-bottom:12px; display:flex; align-items:center; gap:6px; border-bottom:1px solid #d1fae5; padding-bottom:4px;">👑 自社・契約パートナーの動向</div>${myNews.map(buildItem).join('')}</div>`;
+            if (aiStrategy.length > 0) blocks += `<div style="margin-bottom:24px;"><div style="font-size:14px; font-weight:800; color:#1d4ed8; margin-bottom:12px; display:flex; align-items:center; gap:6px; border-bottom:1px solid #dbeafe; padding-bottom:4px;">🤖 AI企業の戦略・M&A</div>${aiStrategy.map(buildItem).join('')}</div>`;
+            if (globalEco.length > 0) blocks += `<div style="margin-bottom:24px;"><div style="font-size:14px; font-weight:800; color:#92400e; margin-bottom:12px; display:flex; align-items:center; gap:6px; border-bottom:1px solid #fef3c7; padding-bottom:4px;">🌍 世界市場・マクロ環境</div>${globalEco.map(buildItem).join('')}</div>`;
+
+            if (blocks === '') blocks = `<div style="text-align:center; padding:40px; color:#6b7280; font-size:13px; font-weight:600;">今週の重要なニュースはありません。</div>`;
 
             modalsArea.insertAdjacentHTML('beforeend', `
-                <div id="weekly-news-screen" style="position:fixed;inset:0;z-index:100200;
-                    background:#f9fafb;display:flex;flex-direction:column;overflow:hidden;
-                    font-family:'Inter','Noto Sans JP',sans-serif;">
-                    <style>
-                        @keyframes wkItemIn { to { opacity:1; transform:translateY(0); } }
-                        @keyframes wkHeaderIn { from{opacity:0;transform:translateY(-8px);}to{opacity:1;transform:translateY(0);} }
-                        #weekly-news-screen ::-webkit-scrollbar{width:5px;}
-                        #weekly-news-screen ::-webkit-scrollbar-track{background:#f1f5f9;}
-                        #weekly-news-screen ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:3px;}
-                    </style>
-
-                    <!-- マストヘッド -->
-                    <div style="background:#fff;border-bottom:1px solid #e5e7eb;padding:16px 24px 0;
-                        flex-shrink:0;animation:wkHeaderIn 0.3s ease;box-shadow:0 1px 4px rgba(0,0,0,0.04);">
-                        <div style="display:flex;align-items:flex-end;justify-content:space-between;
-                            padding-bottom:14px;border-bottom:3px solid #111827;margin-bottom:0;">
+                <div id="weekly-news-screen" style="position:fixed; inset:0; z-index:100200; background:rgba(15,23,42,0.4); backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; padding:20px; animation:fadeIn 0.2s ease;">
+                    <style>@keyframes fadeIn { from{opacity:0;} to{opacity:1;} } @keyframes slideUp { from{transform:translateY(20px);opacity:0;} to{transform:translateY(0);opacity:1;} }</style>
+                    <div style="background:#f8fafc; width:100%; max-width:540px; max-height:85vh; border-radius:16px; box-shadow:0 20px 40px rgba(0,0,0,0.2); display:flex; flex-direction:column; overflow:hidden; font-family:'Inter','Noto Sans JP',sans-serif; animation:slideUp 0.3s ease forwards;">
+                        
+                        <div style="background:linear-gradient(135deg, #1e293b, #334155); padding:20px 24px; color:#fff; display:flex; align-items:center; justify-content:space-between; flex-shrink:0;">
                             <div>
-                                <div style="font-size:9px;color:#9ca3af;letter-spacing:3px;text-transform:uppercase;font-weight:600;margin-bottom:4px;">Global Business Intelligence</div>
-                                <div style="font-family:'Playfair Display','Noto Serif JP',Georgia,serif;
-                                    font-size:28px;font-weight:900;color:#111827;letter-spacing:-1px;line-height:1;">THE M&A JOURNAL</div>
+                                <div style="font-size:10px; font-weight:700; color:#cbd5e1; letter-spacing:2px; margin-bottom:4px;">MORNING BRIEFING</div>
+                                <div style="font-size:20px; font-weight:900;">今週の要約 <span style="font-size:14px; font-weight:600; color:#94a3b8; margin-left:8px;">${weekStr}</span></div>
                             </div>
-                            <div style="text-align:right;padding-bottom:4px;">
-                                <div style="font-size:11px;color:#6b7280;font-weight:500;">${weekStr} 発行</div>
-                                <div style="margin-top:4px;">
-                                    ${urgentCount > 0
-                    ? `<span style="display:inline-block;background:#dc2626;color:#fff;padding:3px 10px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:1px;">⚠ ${urgentCount}件 URGENT</span>`
-                    : `<span style="display:inline-block;background:#d1fae5;color:#065f46;padding:3px 10px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:1px;">✓ ALL CLEAR</span>`
-                }
-                                </div>
-                            </div>
+                            <div style="font-size:32px; opacity:0.8;">☕</div>
                         </div>
-                        <!-- カテゴリタブ -->
-                        <div style="display:flex;gap:0;overflow-x:auto;scrollbar-width:none;">
-                            ${tabsHtml}
+
+                        <div style="flex:1; overflow-y:auto; padding:24px; background:#f1f5f9; box-shadow:inset 0 2px 4px rgba(0,0,0,0.02);">
+                            ${blocks}
                         </div>
-                    </div>
 
-                    <!-- 記事エリア -->
-                    <div style="flex:1;overflow-y:auto;padding:20px 24px 16px;background:#f9fafb;">
-                        ${emptyHtml}
-                        ${topLog ? buildCard(topLog, 'headline') : ''}
-                        ${headline2col}
-                        ${minorHtml}
-                    </div>
-
-                    <!-- フッター -->
-                    <div style="padding:14px 24px;background:#fff;border-top:1px solid #e5e7eb;flex-shrink:0;">
-                        <button onclick="window._weeklyNewsTab='すべて'; document.getElementById('weekly-news-screen').remove(); updateDashboard(); if(typeof renderNewspaper==='function') renderNewspaper();"
-                            style="width:100%;padding:13px;background:#1f2937;color:#fff;
-                            border:none;border-radius:10px;font-size:13px;font-weight:700;
-                            cursor:pointer;letter-spacing:1px;transition:background 0.15s;"
-                            onmouseover="this.style.background='#111827'" onmouseout="this.style.background='#1f2937'">
-                            確認して次へ進む →
-                        </button>
+                        <div style="padding:16px 24px; background:#fff; border-top:1px solid #e2e8f0; flex-shrink:0;">
+                            <button onclick="document.getElementById('weekly-news-screen').remove(); updateDashboard(); if(typeof renderNewspaper==='function') renderNewspaper(); window.dispatchEvent(new Event('closeNewsScreen'));"
+                                style="width:100%; padding:14px; background:#0f172a; color:#fff; border:none; border-radius:12px; font-size:14px; font-weight:700; cursor:pointer; transition:background 0.2s;"
+                                onmouseover="this.style.background='#1e293b'" onmouseout="this.style.background='#0f172a'">
+                                確認して次へ進む →
+                            </button>
+                        </div>
                     </div>
                 </div>
             `);
@@ -12470,98 +12399,118 @@ ${ds.desc}`)) {
             let container = document.getElementById('view-news');
             if (!container) return;
 
-            const catIcon = {
-                '自社': '👑', 'M&A': '🤝', '経済': '📊', '競合': '🔍', '政治': '⚖️',
-                '物価': '📈', '不動産': '🏢', '店舗': '☕', '財務': '💰',
-            };
-            const typeConfig2 = {
-                'alert': { bg: '#fff1f2', border: '#fca5a5', badge: '#ef4444', dot: '#ef4444' },
-                'success': { bg: '#f0fdf4', border: '#86efac', badge: '#16a34a', dot: '#16a34a' },
-                'news': { bg: '#eff6ff', border: '#93c5fd', badge: '#3b82f6', dot: '#3b82f6' },
-                'normal': { bg: '#f8fafc', border: '#e2e8f0', badge: '#475569', dot: '#94a3b8' },
-                'warning': { bg: '#fffbeb', border: '#fcd34d', badge: '#d97706', dot: '#d97706' },
-            };
+            const catIcon = { '自社': '👑', 'M&A': '🤝', '経済': '📊', '競合': '🔍', '政治': '⚖️', '物価': '📈', '不動産': '🏢', '店舗': '☕', '財務': '💰' };
+            let categories = ['📰トップニュース', '自社', 'M&A', '経済', '競合', '政治', '物価', '不動産', '店舗', '財務'];
+            let dateStr = window._weekStr(week);
 
-            let categories = ['すべて', '🔴緊急', '自社', 'M&A', '経済', '競合', '政治', '物価', '不動産', '店舗', '財務'];
-            let dateStr = `${2020 + Math.floor((week - 1) / 48)}年 ${Math.floor(((week - 1) % 48) / 4) + 1}月 第${((week - 1) % 4) + 1}週`;
-
-            // 3週分のログを取得
             let allLogs = window.logHistory.slice(0, 150);
-            // 週ごとにグループ化
-            let weekGroups = {};
-            allLogs.forEach(l => {
-                if (!weekGroups[l.week]) weekGroups[l.week] = [];
-                weekGroups[l.week].push(l);
-            });
-            let recentWeeks = Object.keys(weekGroups).slice(0, 3);
-
-            // フィルター後のログ
             let filteredLogs;
-            if (window.currentNewsCategory === 'すべて') {
+            
+            if (!window.currentNewsCategory || window.currentNewsCategory === 'すべて' || window.currentNewsCategory === '🔴緊急') window.currentNewsCategory = '📰トップニュース';
+            
+            if (window.currentNewsCategory === '📰トップニュース') {
                 filteredLogs = allLogs.filter(l => !l.category.startsWith('_'));
-            } else if (window.currentNewsCategory === '🔴緊急') {
-                filteredLogs = allLogs.filter(l => l.type === 'alert' && !l.category.startsWith('_'));
             } else {
                 filteredLogs = allLogs.filter(l => l.category === window.currentNewsCategory);
             }
-            filteredLogs = filteredLogs.slice(0, 80);
-            // 優先度でソート（高い順、同priority内は時系列維持）
+            
             filteredLogs.sort((a, b) => (b.priority || 1) - (a.priority || 1));
 
-            // カテゴリタブ
-            let tabsHtml = `<div style="display:flex;gap:4px;overflow-x:auto;padding-bottom:2px;margin-bottom:16px;scrollbar-width:none;">`;
+            let tabsHtml = `<div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:10px;margin-bottom:16px;scrollbar-width:none;border-bottom:1px solid #d1d5db;">`;
             categories.forEach(cat => {
                 let isActive = window.currentNewsCategory === cat;
-                let count = cat === 'すべて' ? filteredLogs.length : allLogs.filter(l => l.category === cat).slice(0, 60).length;
                 tabsHtml += `<button onclick="window.currentNewsCategory='${cat}';renderNewspaper();"
-                    style="flex-shrink:0;padding:7px 14px;border-radius:999px;border:none;cursor:pointer;font-size:11px;font-weight:700;
-                    background:${isActive ? '#1e293b' : '#f1f5f9'};color:${isActive ? '#fff' : '#64748b'};">
-                    ${cat}${count > 0 ? ` <span style="background:${isActive ? '#3b82f6' : '#e2e8f0'};color:${isActive ? '#fff' : '#64748b'};border-radius:999px;padding:1px 5px;font-size:9px;">${count}</span>` : ''}
+                    style="flex-shrink:0;padding:6px 12px;border:none;cursor:pointer;font-size:12px;font-family:'Noto Serif JP',Georgia,serif;font-weight:${isActive?'900':'500'};
+                    background:transparent;color:${isActive ? '#111827' : '#6b7280'};
+                    border-bottom:${isActive ? '2px solid #111827' : '2px solid transparent'};">
+                    ${cat}
                 </button>`;
             });
             tabsHtml += `</div>`;
 
-            // ニュースカード
-            let cardsHtml = '';
+            let mainHtml = '';
+            
             if (filteredLogs.length === 0) {
-                cardsHtml = `<div style="text-align:center;padding:60px 20px;color:#94a3b8;font-size:14px;">該当する記事はありません。</div>`;
-            } else {
-                filteredLogs.forEach((log) => {
-                    let cfg = typeConfig2[log.type] || typeConfig2['normal'];
+                mainHtml = `<div style="text-align:center;padding:60px 20px;color:#94a3b8;font-size:14px;">該当する記事はありません。</div>`;
+            } else if (window.currentNewsCategory === '📰トップニュース') {
+                let headlines = filteredLogs.filter(l => l.priority >= 4).slice(0, 4);
+                let business = filteredLogs.filter(l => l.priority === 3).slice(0, 6);
+                let minorList = filteredLogs.filter(l => l.priority <= 2).slice(0, 15);
+                
+                let buildArticle = (log, isHeadline) => {
                     let icon = catIcon[log.category] || '📰';
-                    let priBadge = '';
-                    if ((log.priority || 1) >= 5) priBadge = '<span style="background:#dc2626;color:#fff;font-size:8px;font-weight:900;padding:2px 6px;border-radius:999px;animation:pulseBanner 1s infinite;">速報</span>';
-                    else if ((log.priority || 1) >= 4) priBadge = '<span style="background:#f59e0b;color:#fff;font-size:8px;font-weight:900;padding:2px 6px;border-radius:999px;">重要</span>';
-                    cardsHtml += `
-                    <div style="background:${cfg.bg};border:1px solid ${cfg.border};border-radius:12px;padding:14px 16px;margin-bottom:10px;${(log.priority || 1) >= 5 ? 'border-left:4px solid #dc2626;' : (log.priority || 1) >= 4 ? 'border-left:4px solid #f59e0b;' : ''}">
-                        <div style="display:flex;gap:10px;align-items:flex-start;">
-                            <div style="width:36px;height:36px;border-radius:9px;flex-shrink:0;
-                                background:#fff;border:1px solid ${cfg.border};
-                                display:flex;align-items:center;justify-content:center;font-size:16px;">${icon}</div>
-                            <div style="flex:1;min-width:0;">
-                                <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap;">
-                                    <span style="background:${cfg.badge};color:#fff;font-size:9px;font-weight:800;
-                                        padding:2px 8px;border-radius:999px;">${log.category}</span>
-                                    ${priBadge}
-                                    <span style="font-size:10px;color:#94a3b8;">${log.week}</span>
-                                </div>
-                                <div style="font-size:13px;font-weight:600;color:#1e293b;line-height:1.5;">${log.msg}</div>
-                            </div>
+                    let tlabel = isHeadline ? '【特報】' : `【${log.category}】`;
+                    let msgClean = log.msg.replace(/【.*?】/, '').trim();
+                    let fsize = isHeadline ? '18px' : '14px';
+                    let fwe = isHeadline ? '900' : '700';
+                    return `
+                    <div style="margin-bottom:16px; padding-bottom:16px; border-bottom:1px solid #e5e7eb;">
+                        <div style="font-size:10px;color:#6b7280;margin-bottom:4px;">${tlabel} <span style="margin-left:6px;">${log.week}</span></div>
+                        <div style="font-size:${fsize};font-weight:${fwe};font-family:'Noto Serif JP',Georgia,serif;line-height:1.4;color:#111827;margin-bottom:6px;">
+                            ${msgClean}
                         </div>
                     </div>`;
-                });
+                };
+                
+                let hlHtml = headlines.map(l => buildArticle(l, true)).join('');
+                let busHtml = business.map(l => buildArticle(l, false)).join('');
+                let minorHtml = minorList.map(l => `
+                    <div style="display:flex; gap:8px; margin-bottom:10px; font-size:11px; font-family:'Noto Serif JP',Georgia,serif; color:#4b5563; align-items:flex-start;">
+                        <span style="font-size:14px; line-height:1;">${catIcon[l.category]||'📰'}</span>
+                        <div style="flex:1; line-height:1.4;">${l.msg.replace(/【.*?】/,'').trim()} <span style="color:#9ca3af;font-size:9px;">(${l.week})</span></div>
+                    </div>
+                `).join('');
+                
+                let phaseStr = window._econ.phase === 'boom' ? '☀️ 好景気' : window._econ.phase === 'normal' ? '⛅ 安定' : window._econ.phase === 'bust' ? '⛈️ 不景気' : '🌤️ 回復期';
+                
+                mainHtml = `
+                <div style="display:flex; gap:20px; flex-wrap:wrap; font-family:'Noto Serif JP',Georgia,serif;">
+                    <div style="flex:2; min-width:300px;">
+                        <div style="border-bottom:2px solid #111827; font-size:14px; font-weight:900; margin-bottom:12px; padding-bottom:4px;">HEADLINES</div>
+                        ${hlHtml || '<div style="color:#9ca3af;font-size:12px;">特報はありません</div>'}
+                        
+                        <div style="border-bottom:1px solid #111827; font-size:12px; font-weight:900; margin-bottom:12px; margin-top:20px; padding-bottom:4px;">BUSINESS & MARKETS</div>
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:16px;">
+                            ${busHtml}
+                        </div>
+                    </div>
+                    
+                    <div style="flex:1; min-width:240px;">
+                        <div style="background:#f3f4f6; border:1px solid #d1d5db; padding:16px; margin-bottom:20px;">
+                            <div style="font-size:13px; font-weight:900; margin-bottom:12px; border-bottom:1px solid #9ca3af; padding-bottom:6px;">MARKET AT A GLANCE</div>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:12px;"><span>経済フェーズ</span><b>${phaseStr}</b></div>
+                            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:12px;"><span>法人税率</span><b>${((window.globalTaxRate||0.15)*100).toFixed(0)}%</b></div>
+                            <div style="display:flex; justify-content:space-between; font-size:12px;"><span>コーヒー相場</span><b>${window._beanPriceMult > 1 ? '高騰⤵' : window._beanPriceMult < 1 ? '下落⤴' : '標準'}</b></div>
+                        </div>
+                        
+                        <div style="border-bottom:1px solid #d1d5db; font-size:12px; font-weight:900; margin-bottom:10px; padding-bottom:4px;">その他ニュース記事</div>
+                        ${minorHtml}
+                    </div>
+                </div>`;
+            } else {
+                let listHtml = filteredLogs.map((log) => {
+                    let msgClean = log.msg.replace(/【.*?】/, '').trim();
+                    return `
+                    <div style="padding:12px 0; border-bottom:1px dashed #d1d5db; font-family:'Noto Serif JP',Georgia,serif; display:flex; gap:12px;">
+                        <div style="font-size:20px; line-height:1;">${catIcon[log.category]||'📰'}</div>
+                        <div>
+                            <div style="font-size:13px; font-weight:700; color:#111827; margin-bottom:4px;">${msgClean}</div>
+                            <div style="font-size:11px; color:#6b7280;">${log.week} ${log.priority >= 4 ? '<b style="color:#dc2626;">[重要]</b>' : ''}</div>
+                        </div>
+                    </div>`;
+                }).join('');
+                mainHtml = `<div>${listHtml}</div>`;
             }
 
             container.innerHTML = `
-            <div style="background:#fff;min-height:100%;padding:20px 16px;">
-                <!-- ヘッダー -->
-                <div style="text-align:center;border-bottom:3px double #e2e8f0;padding-bottom:16px;margin-bottom:20px;">
-                    <div style="font-size:11px;color:#3b82f6;font-weight:900;letter-spacing:3px;margin-bottom:4px;">THE M&A JOURNAL</div>
-                    <div style="font-size:26px;font-weight:900;color:#1e293b;font-family:Georgia,serif;margin-bottom:6px;">主要経済ニュース</div>
-                    <div style="font-size:11px;color:#94a3b8;font-weight:600;">${dateStr} 発行 / 購読者：全世界ビジネス・リーダー</div>
+            <div style="background:#faf8f5; min-height:100%; padding:24px 20px;">
+                <div style="text-align:center; border-top:1px solid #111827; border-bottom:3px double #111827; padding:16px 0; margin-bottom:20px;">
+                    <div style="font-size:10px; color:#4b5563; font-weight:700; letter-spacing:4px; margin-bottom:6px;">GLOBAL BUSINESS INTELLIGENCE</div>
+                    <div style="font-size:36px; font-weight:900; color:#111827; font-family:'Playfair Display','Noto Serif JP',Georgia,serif; margin-bottom:4px; line-height:1;">THE M&A JOURNAL</div>
+                    <div style="font-size:12px; color:#4b5563; font-family:'Noto Serif JP',Georgia,serif;">${dateStr} 発行 / 購読者：全世界のビジネス・リーダー</div>
                 </div>
                 ${tabsHtml}
-                ${cardsHtml}
+                ${mainHtml}
             </div>`;
         };
 
