@@ -1076,11 +1076,12 @@
         };
         window.getCountryBadge = function (country) { return countryBadge[country] || ''; };
 
-        // 金庫株ヘルパー: 浮動株数（ルールBにより、現在は総発行済株式数を返す）
+        // 浮動株数 = 議決権ベース（総発行済株式 - 金庫株）
         window.getFloatShares = function (co) {
-            // 金庫株（自社株買い）は市場の流通株（Market Shares）を減らす防衛手段として機能しますが、
-            // 傘下（子会社）かどうかの判定判定分母からは除外せず、常に「総発行株式の50%超」を要求するように変更。
-            return co.shares || 0;
+            // 金庫株（自社保有分）は議決権なしのため分母から除外
+            // AI企業: shareholders[co.id] が金庫株、プレイヤー: _treasuryShares が金庫株
+            let treasury = (co.shareholders && co.shareholders[co.id]) || (co.id === 'player' ? (co._treasuryShares || 0) : 0);
+            return Math.max(0, (co.shares || 0) - treasury);
         };
         // 市場流通株（誰にも名義登録されていない株）を動的に計算
         window.getMarketShares = function (co) {
@@ -1960,6 +1961,11 @@
                 });
             });
 
+            // 🏦 各上場AI企業に金庫株（自社保有20%）を設定（議決権なし・売買対象外）
+            companies.filter(c => c.id !== 'player' && c.isPublic).forEach(c => {
+                c.shareholders[c.id] = Math.floor(c.shares * 0.20);
+            });
+
             // 📊 証券会社の特典初期化＋全企業のブローカー割り当て
             companies.filter(c => c.sector === 'sogo' && !c.isBankrupt).forEach(b => {
                 let rank = b.id.endsWith('_0') ? 0 : b.id.endsWith('_1') ? 1 : 2;
@@ -1993,43 +1999,8 @@
             companies.filter(c => c.sector === 'bank').forEach(b => {
                 b.termDepositRate = 0.003; // 週+0.3%固定
             });
-            // 🏦 証券会社に初期株式ポートフォリオを付与（5〜10社をランダム保有）
-            companies.filter(c => c.sector === 'sogo').forEach(sogoCo => {
-                let investable = Math.floor(sogoCo.cash * 0.60); // 資金の60%を投資
-                let targets = companies.filter(t =>
-                    t.id !== sogoCo.id && t.isPublic && !t.isBankrupt &&
-                    t.sector !== 'ad' && t.id !== 'player'
-                );
-                // ランダムに5〜10社選ぶ
-                let numTargets = 7 + Math.floor(Math.random() * 4); // 7〜10社
-                let shuffled = targets.sort(() => 0.5 - Math.random()).slice(0, numTargets);
-                let perStock = Math.floor(investable / numTargets);
-                let acquiredCount = 0;
-                shuffled.forEach(tgt => {
-                    let shares = Math.floor(perStock / Math.max(1, tgt.stockPrice));
-                    let maxShares = Math.floor(tgt.shares * 0.18); // 18%まで緩和
-                    let actualShares = Math.min(shares, maxShares);
-                    if (actualShares > 0 && sogoCo.cash >= actualShares * tgt.stockPrice) {
-                        tgt.shareholders[sogoCo.id] = (tgt.shareholders[sogoCo.id] || 0) + actualShares;
-                        sogoCo.cash -= actualShares * tgt.stockPrice;
-                        acquiredCount++;
-                    }
-                });
-                // 最低5社保証 - 足りない場合は追加購入
-                if (acquiredCount < 5) {
-                    let remaining = targets.filter(t => !(t.shareholders[sogoCo.id] > 0)).sort(() => 0.5 - Math.random());
-                    remaining.slice(0, 5 - acquiredCount).forEach(tgt => {
-                        let minShares = Math.max(1, Math.floor(tgt.shares * 0.02));
-                        if (sogoCo.cash >= minShares * tgt.stockPrice) {
-                            tgt.shareholders[sogoCo.id] = minShares;
-                            sogoCo.cash -= minShares * tgt.stockPrice;
-                        }
-                    });
-                }
-            });
-
             buildCapitalChain();
-            // 浮動株（market）を初期化：残余を計算
+            // 浮動株（market）を仮初期化（持ち合い設定前の暫定値）
             companies.forEach(c => {
                 if (!c.shareholders) return;
                 c.shareholders['market'] = window.getMarketShares(c);
@@ -2060,6 +2031,48 @@
                         sub.name = `[${sogoCo.name.replace(/\[.*?\]\s*/, '').slice(0, 4)}傘下] ${sub.name.replace(/\[.*?\]\s*/, '')}`;
                     }
                 }
+            });
+
+            // 🤝 上場AI企業の持ち合い（40%）をランダム分配（企業タイプ別の保有傾向）
+            // buildCapitalChain()・子会社設定後に実行し、既存保有を考慮して差分のみ追加
+            const _personalityWeights = { Aggressive: 1.5, Growth: 1.2, Greedy: 0.8, Conservative: 0.5, Turnaround: 0.3 };
+            const _aiPublicCos = companies.filter(c => c.id !== 'player' && c.isPublic && !c.isBankrupt);
+            _aiPublicCos.forEach(c => {
+                // 既存の名義保有（金庫株・market除く）を集計
+                let namedOwned = Object.keys(c.shareholders)
+                    .filter(k => k !== 'market' && k !== c.id)
+                    .reduce((s, k) => s + (c.shareholders[k] || 0), 0);
+                let crossTarget = Math.floor(c.shares * 0.40);
+                let toDistribute = Math.max(0, crossTarget - namedOwned);
+                // 既に40%以上が名義保有済み（子会社など）はスキップ
+                if (toDistribute <= 0) return;
+                // 保有候補企業（自社除く、3〜6社ランダム選択）
+                let candidates = _aiPublicCos.filter(h => h.id !== c.id);
+                let numHolders = 3 + Math.floor(Math.random() * 4);
+                let holders = candidates.sort(() => Math.random() - 0.5).slice(0, numHolders);
+                if (holders.length === 0) return;
+                // 企業タイプに応じた重みで配分（Aggressiveは多め、Conservativeは少なめ）
+                let weights = holders.map(h => _personalityWeights[h.personality] || 1.0);
+                let totalWeight = weights.reduce((s, w) => s + w, 0);
+                let distributed = 0;
+                holders.forEach((h, i) => {
+                    let shares = Math.floor(toDistribute * (weights[i] / totalWeight));
+                    if (shares > 0) {
+                        c.shareholders[h.id] = (c.shareholders[h.id] || 0) + shares;
+                        distributed += shares;
+                    }
+                });
+                // 端数を最初の持ち合い企業に追加
+                let remainder = toDistribute - distributed;
+                if (remainder > 0) {
+                    c.shareholders[holders[0].id] = (c.shareholders[holders[0].id] || 0) + remainder;
+                }
+            });
+
+            // 浮動株（market）を再計算（持ち合い・金庫株・子会社設定後の確定値）
+            companies.forEach(c => {
+                if (!c.shareholders) return;
+                c.shareholders['market'] = window.getMarketShares(c);
             });
 
             companies.forEach(c => stockHistory.datasets[c.id] = [c.stockPrice]);
@@ -2134,9 +2147,10 @@
             // 🚨 敵対的買収バナー更新
             if (p.isPublic) {
                 let _enemyKeys = Object.keys(p.shareholders).filter(k => k !== 'player' && k !== 'market' && k !== p.id && (p.shareholders[k] || 0) > 0);
-                let _enemyShares = _enemyKeys.reduce((s, k) => s + (p.shareholders[k] || 0), 0);
+                // 一般投資家（market）は分散保有のため脅威とならない。最大単一保有者の比率で判定
+                let _maxEnemyShares = _enemyKeys.reduce((max, k) => Math.max(max, (p.shareholders[k] || 0)), 0);
                 let _flSh = window.getFloatShares(p);
-                let _enemyPct = _flSh > 0 ? _enemyShares / _flSh : 0;
+                let _enemyPct = _flSh > 0 ? _maxEnemyShares / _flSh : 0;
                 let banner = document.getElementById('hostile-takeover-banner');
                 let bannerText = document.getElementById('hostile-banner-text');
                 if (p._skipTakeoverWarningWeek && (week - p._skipTakeoverWarningWeek < 12)) {
@@ -2145,11 +2159,11 @@
                     if (_enemyPct >= 0.35) {
                         banner.style.display = 'block';
                         banner.style.background = 'linear-gradient(90deg,#7f1d1d,#dc2626)';
-                        if (bannerText) bannerText.textContent = `🔴 最終警告！自社株${(_enemyPct * 100).toFixed(1)}%が敵対勢力に！即座に自社株買いで防衛を！`;
+                        if (bannerText) bannerText.textContent = `🔴 最終警告！1社に議決権${(_enemyPct * 100).toFixed(1)}%が集中！即座に自社株買いで防衛を！`;
                     } else if (_enemyPct >= 0.20) {
                         banner.style.display = 'block';
                         banner.style.background = 'linear-gradient(90deg,#b45309,#d97706)';
-                        if (bannerText) bannerText.textContent = `⚠️ 自社株${(_enemyPct * 100).toFixed(1)}%が買い集められています。防衛を検討してください`;
+                        if (bannerText) bannerText.textContent = `⚠️ 単一勢力に議決権${(_enemyPct * 100).toFixed(1)}%が買い集められています。防衛を検討してください`;
                     } else {
                         banner.style.display = 'none';
                     }
@@ -2219,15 +2233,14 @@
             let floatSh = window.getFloatShares(p);
             // 敵対株主 = player, market, 金庫株(p.id) 以外
             let enemyKeys = Object.keys(p.shareholders).filter(k => k !== 'player' && k !== 'market' && k !== p.id && (p.shareholders[k] || 0) > 0);
-            let stolenShares = enemyKeys.reduce((s, k) => s + (p.shareholders[k] || 0), 0);
-            let stolenPct = floatSh > 0 ? stolenShares / floatSh : 0;
-            let playerPct = floatSh > 0 ? (p.shareholders['player'] || 0) / floatSh : 0;
-
-            // 最大敵対株主を特定（実企業のみ）
+            // 最大単一保有者の持ち株比率で脅威を判定（分散持ち合いは集計対象外）
             let topEnemy = enemyKeys.sort((a, b) => (p.shareholders[b] || 0) - (p.shareholders[a] || 0))[0];
             let topEnCo = topEnemy ? companies.find(cx => cx.id === topEnemy) : null;
             let topEnName = topEnCo ? topEnCo.name.replace(/\[.*?\]\s*/, '') : '不明';
             let topEnPct = topEnemy && floatSh > 0 ? ((p.shareholders[topEnemy] || 0) / floatSh * 100).toFixed(1) : '0';
+            let stolenShares = topEnemy ? (p.shareholders[topEnemy] || 0) : 0;
+            let stolenPct = floatSh > 0 ? stolenShares / floatSh : 0;
+            let playerPct = floatSh > 0 ? (p.shareholders['player'] || 0) / floatSh : 0;
 
             // 自社株買い費用計算
             let buyback100 = Math.floor(p.stockPrice * p.shares * 0.05); // 5%買い戻し費用
@@ -2249,14 +2262,14 @@
 
                     <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:14px;margin-bottom:16px;">
                         <div style="font-size:13px;line-height:1.9;">
-                            <div style="display:flex;justify-content:space-between;"><span>⚠️ 外部保有率:</span><b style="color:${dangerColor};">${(stolenPct * 100).toFixed(1)}%</b></div>
-                            <div style="display:flex;justify-content:space-between;"><span>👑 自分の保有率:</span><b style="color:var(--success);">${(playerPct * 100).toFixed(1)}%</b></div>
+                            <div style="display:flex;justify-content:space-between;"><span>⚠️ 最大敵対株主の議決権:</span><b style="color:${dangerColor};">${(stolenPct * 100).toFixed(1)}%</b></div>
+                            <div style="display:flex;justify-content:space-between;"><span>👑 自分の議決権比率:</span><b style="color:var(--success);">${(playerPct * 100).toFixed(1)}%</b></div>
                             <div style="display:flex;justify-content:space-between;"><span>🎯 最大敵対株主:</span><b>${topEnName} (${topEnPct}%)</b></div>
                         </div>
                         <div style="margin-top:10px;height:8px;background:#fee2e2;border-radius:4px;overflow:hidden;">
                             <div style="width:${Math.min(100, stolenPct * 100)}%;height:100%;background:${dangerColor};border-radius:4px;transition:width 0.3s;"></div>
                         </div>
-                        <div style="font-size:10px;color:var(--text-mut);margin-top:4px;">※単一の敵対株主が過半数(51%)を取得するとゲームオーバー</div>
+                        <div style="font-size:10px;color:var(--text-mut);margin-top:4px;">※単一の敵対株主が議決権過半数(51%)を取得するとゲームオーバー</div>
                     </div>
 
                     <h3 style="margin:0 0 12px;font-size:14px;">🛡 防衛手段を選択</h3>
@@ -11402,6 +11415,31 @@ ${ds.desc}`)) {
                 let _pbr = _tAssets > 0 ? (sel.marketCap / _tAssets).toFixed(2) : '---';
                 let _latestVolume = (sel._ohlcv && sel._ohlcv.length > 0) ? sel._ohlcv[sel._ohlcv.length - 1].v : Math.floor(sel.shares * 0.05);
 
+                // 株主構成の計算
+                let _selTreasury = sel.id === 'player' ? (sel._treasuryShares || 0) : (sel.shareholders[sel.id] || 0);
+                let _selMarket = sel.shareholders['market'] || 0;
+                let _selFloat = window.getFloatShares(sel);
+                let _selTreasuryPct = sel.shares > 0 ? (_selTreasury / sel.shares * 100).toFixed(0) : '0';
+                let _selMarketPct = sel.shares > 0 ? (_selMarket / sel.shares * 100).toFixed(0) : '0';
+                let _selCrossHoldPct = Math.max(0, 100 - parseInt(_selTreasuryPct) - parseInt(_selMarketPct));
+                let _selPlayerVotingPct = _selFloat > 0 && o > 0 ? (o / _selFloat * 100).toFixed(1) : '0';
+                // 大株主一覧（market除く、上位5名）
+                let _selTopHolders = Object.keys(sel.shareholders)
+                    .filter(k => k !== 'market')
+                    .map(k => {
+                        let hCo = companies.find(c => c.id === k);
+                        let hName = k === 'player' ? '👑 自社' : k === sel.id ? '🏦 金庫株' : (hCo ? hCo.name.replace(/\[.*?\]\s*/g, '').substring(0, 12) : k);
+                        return { id: k, name: hName, shares: sel.shareholders[k] || 0, color: k === sel.id ? '#a78bfa' : (k === 'player' ? '#22c55e' : (hCo?.color || '#64748b')) };
+                    })
+                    .sort((a, b) => b.shares - a.shares)
+                    .slice(0, 5);
+                // プレイヤー企業の金庫株は_treasurySharesで管理
+                if (sel.id === 'player' && _selTreasury > 0 && !_selTopHolders.find(h => h.id === 'player_treasury')) {
+                    _selTopHolders.push({ id: '_treasury', name: '🏦 金庫株', shares: _selTreasury, color: '#a78bfa' });
+                    _selTopHolders.sort((a, b) => b.shares - a.shares);
+                    _selTopHolders = _selTopHolders.slice(0, 5);
+                }
+
                 let _needed = Math.floor(sel.shares * 0.51) + 1;
                 let _rem = _needed - o;
                 let _tobHtml = '';
@@ -11467,6 +11505,36 @@ ${ds.desc}`)) {
                                 <div style="display:flex;justify-content:space-between;font-size:10px;color:#cbd5e1;"><span style="color:#94a3b8;">週間出来高</span><b style="color:#fff;">${_latestVolume.toLocaleString()}</b></div>
                             </div>
                         </div>
+                    </div>
+                    <div style="background:#1e293b; border-top:1px solid #334155; padding:10px 14px;">
+                        <div style="font-size:10px;color:#64748b;font-weight:700;margin-bottom:6px;letter-spacing:1px;">📊 株主構成</div>
+                        <div style="display:flex;gap:4px;margin-bottom:8px;">
+                            <div style="flex:1;background:#0f172a;border-radius:4px;padding:4px 6px;text-align:center;">
+                                <div style="font-size:8px;color:#64748b;">🏦 金庫株</div>
+                                <div style="font-size:11px;font-weight:900;color:#a78bfa;">${_selTreasuryPct}%</div>
+                            </div>
+                            <div style="flex:1;background:#0f172a;border-radius:4px;padding:4px 6px;text-align:center;">
+                                <div style="font-size:8px;color:#64748b;">🤝 持ち合い</div>
+                                <div style="font-size:11px;font-weight:900;color:#f59e0b;">${_selCrossHoldPct}%</div>
+                            </div>
+                            <div style="flex:1;background:#0f172a;border-radius:4px;padding:4px 6px;text-align:center;">
+                                <div style="font-size:8px;color:#64748b;">👥 浮動株</div>
+                                <div style="font-size:11px;font-weight:900;color:#0284c7;">${_selMarketPct}%</div>
+                            </div>
+                            ${o > 0 ? `<div style="flex:1;background:#0f172a;border-radius:4px;padding:4px 6px;text-align:center;border:1px solid #22c55e44;">
+                                <div style="font-size:8px;color:#64748b;">🎮 議決権</div>
+                                <div style="font-size:11px;font-weight:900;color:#22c55e;">${_selPlayerVotingPct}%</div>
+                            </div>` : ''}
+                        </div>
+                        <div style="font-size:9px;color:#64748b;font-weight:700;margin-bottom:4px;">大株主（上位5名）</div>
+                        ${_selTopHolders.map(h => {
+                            let hPct = sel.shares > 0 ? (h.shares / sel.shares * 100).toFixed(1) : '0';
+                            return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
+                                <div style="font-size:9px;color:#cbd5e1;width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${h.name}</div>
+                                <div style="flex:1;height:5px;background:#334155;border-radius:3px;overflow:hidden;"><div style="width:${Math.min(100, parseFloat(hPct) * 2.5)}%;height:100%;background:${h.color};border-radius:3px;"></div></div>
+                                <div style="font-size:9px;color:#94a3b8;width:32px;text-align:right;">${hPct}%</div>
+                            </div>`;
+                        }).join('')}
                     </div>
                     <div style="background:#f1f5f9;display:flex; border-top:1px solid var(--border);">
                         <div style="padding:12px 16px; flex:1; border-right:1px solid var(--border);">
