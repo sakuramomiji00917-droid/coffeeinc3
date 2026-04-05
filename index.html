@@ -10357,10 +10357,11 @@ ${ds.desc}`)) {
                                     if (c.id === 'player') return;
 
                                     // 1. 現物
-                                    let spotCount = p.shareholders[c.id] || 0;
+                                    let spotCount = c.shareholders['player'] || 0;
                                     if (spotCount > 0) {
-                                        let avg = (p._spotAvgPrices || {})[c.id] || 0;
-                                        let pl = avg > 0 ? (c.stockPrice - avg) * spotCount : 0;
+                                        let avgCostTotal = c.playerTotalCost || 0;
+                                        let avg = spotCount > 0 ? Math.floor(avgCostTotal / spotCount) : 0;
+                                        let pl = avgCostTotal > 0 ? c.stockPrice * spotCount - avgCostTotal : 0;
                                         rows += `<tr>
                                             <td><div style="font-weight:900;">${c.name.replace(/\[.*?\]\s*/,'')}</div><span class="tag-spot">現物</span></td>
                                             <td>${spotCount.toLocaleString()} 株<br><span style="font-size:11px;color:var(--text-mut);">¥${avg > 0 ? avg.toLocaleString() : '---'}</span></td>
@@ -11824,7 +11825,7 @@ ${ds.desc}`)) {
                                 </div>
 
                                 <div style="display:flex; gap:8px; margin-bottom:8px;">
-                                    <input type="number" id="trade-amount" value="100" min="1" oninput="syncTradeSlider()" style="font-size:18px; font-weight:bold; text-align:center;">
+                                    <input type="number" id="trade-amount" value="100" min="100" step="100" oninput="syncTradeSlider()" style="font-size:18px; font-weight:bold; text-align:center;">
                                     <button class="btn-dark" style="padding:0 20px;" onclick="setTradeMax()">MAX</button>
                                 </div>
                                 <div style="margin-bottom:20px;" id="trade-slider-wrap">
@@ -11904,6 +11905,8 @@ ${ds.desc}`)) {
                document.getElementById('trade-fee-rate').innerText = fr + '%';
             }
 
+            document.getElementById('trade-company-name').innerText = c.name.replace(/\[.*?\]\s*/, '');
+            document.getElementById('trade-stock-price').innerText = `¥${c.stockPrice.toLocaleString()}`;
             document.getElementById('trade-current-cash').innerText = `¥${p.cash.toLocaleString()}`;
             document.getElementById('trade-available-shares').innerText = `市場出回: ${(window.getMarketShares(c)).toLocaleString()} 株`;
 
@@ -11974,17 +11977,21 @@ ${ds.desc}`)) {
             
             // 🌟 信用切り替えエリアの表示制御
             let c = companies.find(x => x.id === tradingCompanyId), p = companies[0];
-            let owned = p.shareholders[c.id] || 0;
+            let owned = c.shareholders['player'] || 0;
             let marginArea = document.getElementById('margin-toggle-area');
             if (m === 'buy') {
+                window._isMarginMode = false; // 買いモード切替時に信用モードをリセット
                 marginArea.style.display = 'block';
-                document.getElementById('btn-margin-toggle').innerText = window._isMarginMode ? "信用利用中" : "信用を利用";
+                document.getElementById('btn-margin-toggle').innerText = "信用を利用";
+                document.getElementById('btn-margin-toggle').className = "btn-outline";
             } else {
                 marginArea.style.display = owned > 0 ? 'none' : 'block'; // 保有株がない=新規空売りの場合は信用強制または表示
                 if (owned === 0) {
                     window._isMarginMode = true; // 強制的に信用モードへ
                     document.getElementById('btn-margin-toggle').innerText = "空売り(信用)";
                     document.getElementById('btn-margin-toggle').className = "btn-primary";
+                } else {
+                    window._isMarginMode = false; // 現物保有時は信用モード解除→現物売り優先
                 }
             }
 
@@ -12016,7 +12023,8 @@ ${ds.desc}`)) {
         window.syncTradeFromSlider = function () {
             let c = companies.find(x => x.id === tradingCompanyId);
             let pct = parseFloat(document.getElementById('trade-pct-slider').value) || 0;
-            let shares = Math.floor(c.shares * pct / 100);
+            let sharesRaw = Math.floor(c.shares * pct / 100);
+            let shares = Math.floor(sharesRaw / 100) * 100; // 100株単位にスナップ
             document.getElementById('trade-amount').value = shares;
             let lbl = document.getElementById('trade-slider-pct');
             if (lbl) lbl.textContent = pct.toFixed(1) + '%';
@@ -12028,7 +12036,8 @@ ${ds.desc}`)) {
             let price = window.tradeType === 'limit' ? (parseInt(document.getElementById('trade-limit-price').value) || c.stockPrice) : c.stockPrice;
             if (tradeMode === 'buy') {
                 let avail = window.getMarketShares(c);
-                document.getElementById('trade-amount').value = Math.min(avail, Math.floor(p.cash / price));
+                let maxRaw = Math.min(avail, Math.floor(p.cash / price));
+                document.getElementById('trade-amount').value = Math.floor(maxRaw / 100) * 100;
             } else { document.getElementById('trade-amount').value = c.shareholders['player'] || 0; }
             calcTrade();
 
@@ -12164,7 +12173,14 @@ ${ds.desc}`)) {
             if (isNaN(a) || a <= 0) return;
 
             let p = companies[0];
-            let type = forceType || (tradeMode === 'buy' ? (window._isMarginMode ? 'marginlong' : 'spot') : (p.shareholders[c.id] >= a ? 'spot_sell' : 'marginshort'));
+            let ownedShares = c.shareholders['player'] || 0;
+
+            // 100株単位バリデーション（現物の端株売却は許可）
+            if (a % 100 !== 0 && (tradeMode === 'buy' || ownedShares === 0)) {
+                return alert('100株単位で注文してください。');
+            }
+
+            let type = forceType || (tradeMode === 'buy' ? (window._isMarginMode ? 'marginlong' : 'spot') : (ownedShares >= a ? 'spot_sell' : 'marginshort'));
             
             if (window.tradeType === 'limit') {
                 let limitPrice = parseInt(document.getElementById('trade-limit-price').value);
