@@ -5096,13 +5096,13 @@
                                                     let execAmt = Math.min(ord.amount, buyAmount - matchedFromPlayer);
                                                     let _pOwned = (_player.shareholders[tradeTarget.id] || 0);
                                                     if (_pOwned >= execAmt && c.cash >= ord.price * execAmt) {
-                                                        let avgCost = _pOwned > 0 ? (_player.playerTotalCost / _pOwned) : ord.price;
+                                                        let avgCost = _pOwned > 0 ? ((tradeTarget.playerTotalCost || 0) / _pOwned) : ord.price;
                                                         let profit = (ord.price - avgCost) * execAmt;
                                                         // プレイヤー側：現金入金・保有株減少
                                                         _player.cash += ord.price * execAmt;
-                                                        _player.playerTotalCost = Math.max(0, _player.playerTotalCost - avgCost * execAmt);
+                                                        tradeTarget.playerTotalCost = Math.max(0, (tradeTarget.playerTotalCost || 0) - avgCost * execAmt);
                                                         _player.shareholders[tradeTarget.id] = Math.max(0, _pOwned - execAmt);
-                                                        if (_player.shareholders[tradeTarget.id] === 0) _player.playerTotalCost = 0;
+                                                        if (_player.shareholders[tradeTarget.id] === 0) tradeTarget.playerTotalCost = 0;
                                                         // AI側：現金減少・保有株増加
                                                         c.cash -= ord.price * execAmt;
                                                         tradeTarget.shareholders[c.id] = (tradeTarget.shareholders[c.id] || 0) + execAmt;
@@ -5182,7 +5182,7 @@
                                                     // プレイヤー側：現金減少・保有株増加
                                                     _player.cash -= ord.price * execAmt;
                                                     _player.shareholders[sellTarget.id] = (_player.shareholders[sellTarget.id] || 0) + execAmt;
-                                                    _player.playerTotalCost += ord.price * execAmt;
+                                                    sellTarget.playerTotalCost = (sellTarget.playerTotalCost || 0) + ord.price * execAmt;
                                                     // AI側：現金入金・保有株減少（プレイヤーの指値価格で受け取る）
                                                     sellTarget.shareholders[c.id] = Math.max(0, (sellTarget.shareholders[c.id] || 0) - execAmt);
                                                     c.cash += ord.price * execAmt;
