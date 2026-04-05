@@ -11980,8 +11980,10 @@ ${ds.desc}`)) {
             let owned = c.shareholders['player'] || 0;
             let marginArea = document.getElementById('margin-toggle-area');
             if (m === 'buy') {
+                window._isMarginMode = false; // 買いモード切替時に信用モードをリセット
                 marginArea.style.display = 'block';
-                document.getElementById('btn-margin-toggle').innerText = window._isMarginMode ? "信用利用中" : "信用を利用";
+                document.getElementById('btn-margin-toggle').innerText = "信用を利用";
+                document.getElementById('btn-margin-toggle').className = "btn-outline";
             } else {
                 marginArea.style.display = owned > 0 ? 'none' : 'block'; // 保有株がない=新規空売りの場合は信用強制または表示
                 if (owned === 0) {
