@@ -5045,38 +5045,97 @@
                     c._profHist.push(prof);
                     if (c._profHist.length > 8) c._profHist.shift();
 
-                    // 🌟 AIマーケット・トレーディング (ポートフォリオ運用)
-                    if (c.cash > 50000000 && Math.random() < 0.15) {
+                    // 🌟 AI企業のターン中株式売買（オーダーブック経由・企業タイプ別）
+                    // 企業タイプ別の売買確率（買い確率・売り確率）
+                    const _aiTradeChance = {
+                        Aggressive:   { buy: 0.35, sell: 0.10 },
+                        Growth:       { buy: 0.25, sell: 0.15 },
+                        Greedy:       { buy: 0.15, sell: 0.20 },
+                        Conservative: { buy: 0.10, sell: 0.10 },
+                        Turnaround:   { buy: 0.10, sell: 0.35 }
+                    };
+                    // 1ターンあたりの最大売買量（発行済株式比）
+                    const _aiMaxBuyPct  = { Aggressive: 0.030, Growth: 0.020, Greedy: 0.015, Conservative: 0.010, Turnaround: 0.010 };
+                    const _aiMaxSellPct = { Aggressive: 0.010, Growth: 0.015, Greedy: 0.020, Conservative: 0.010, Turnaround: 0.030 };
+                    let _tChance = _aiTradeChance[c.personality] || { buy: 0.15, sell: 0.15 };
+
+                    // ── AI買い行動 ──
+                    if (c.cash > 50000000 && Math.random() < _tChance.buy) {
                         let tradeTarget = companies[Math.floor(Math.random() * companies.length)];
                         if (tradeTarget && tradeTarget.id !== c.id && !tradeTarget.isBankrupt && tradeTarget.isPublic) {
-                            // スコア簡易計算
+                            // ファンダメンタルズ評価
                             let netAssets_t = tradeTarget.cash + Object.values(tradeTarget.deposits || {}).reduce((s, v) => s + v, 0) - (tradeTarget.debt || 0);
                             let pbr_t = tradeTarget.marketCap / Math.max(1, netAssets_t);
                             let roe_t = netAssets_t > 0 ? ((tradeTarget.lastQProfit || 0) * 4 / netAssets_t * 100) : 0;
-                            
-                            // 買い判断
-                            if ((pbr_t < 0.8 || roe_t > 15) && c.cash > tradeTarget.stockPrice * 1000) {
-                                let buyAmount = Math.floor(tradeTarget.shares * 0.002); // 0.2% ずつ
-                                let cost = buyAmount * tradeTarget.stockPrice;
-                                if (c.cash >= cost && (tradeTarget.shareholders[c.id] || 0) < tradeTarget.shares * 0.1) {
-                                    c.cash -= cost;
-                                    tradeTarget.shareholders[c.id] = (tradeTarget.shareholders[c.id] || 0) + buyAmount;
+
+                            // 保有上限チェック（議決権ベース20%以内）
+                            let _floatSh_t = window.getFloatShares(tradeTarget);
+                            let _heldPct_t = _floatSh_t > 0 ? (tradeTarget.shareholders[c.id] || 0) / _floatSh_t : 0;
+
+                            // 買い判断：割安または高収益、かつ保有上限未達
+                            if ((pbr_t < 0.8 || roe_t > 15) && c.cash > tradeTarget.stockPrice * 1000 && _heldPct_t < 0.20) {
+                                let maxBuyPct = _aiMaxBuyPct[c.personality] || 0.020;
+                                // 購入量：発行株比・流動性・保有上限の最小値
+                                let roomToHold = Math.max(0, Math.floor(_floatSh_t * 0.20) - (tradeTarget.shareholders[c.id] || 0));
+                                let buyAmount = Math.min(
+                                    Math.floor(tradeTarget.shares * maxBuyPct),
+                                    window.getMarketShares(tradeTarget),
+                                    roomToHold
+                                );
+                                if (buyAmount > 0 && c.cash >= buyAmount * tradeTarget.stockPrice) {
+                                    // ① プレイヤーの指値売り注文との対当（相互取引）
+                                    let _player = companies[0];
+                                    let matchedFromPlayer = 0;
+                                    if (_player.pendingOrders && _player.pendingOrders.length > 0) {
+                                        _player.pendingOrders = _player.pendingOrders.filter(ord => {
+                                            if (matchedFromPlayer >= buyAmount) return true;
+                                            // プレイヤーの売り指値注文と対当（type: 'spot_sell' または 'sell'）
+                                            if (ord.coId === tradeTarget.id && (ord.type === 'spot_sell' || ord.type === 'sell')) {
+                                                // AIは時価以下の売り注文を約定
+                                                if (ord.price <= tradeTarget.stockPrice) {
+                                                    let execAmt = Math.min(ord.amount, buyAmount - matchedFromPlayer);
+                                                    let _pOwned = (_player.shareholders[tradeTarget.id] || 0);
+                                                    if (_pOwned >= execAmt && c.cash >= ord.price * execAmt) {
+                                                        let avgCost = _pOwned > 0 ? (_player.playerTotalCost / _pOwned) : ord.price;
+                                                        let profit = (ord.price - avgCost) * execAmt;
+                                                        // プレイヤー側：現金入金・保有株減少
+                                                        _player.cash += ord.price * execAmt;
+                                                        _player.playerTotalCost = Math.max(0, _player.playerTotalCost - avgCost * execAmt);
+                                                        _player.shareholders[tradeTarget.id] = Math.max(0, _pOwned - execAmt);
+                                                        if (_player.shareholders[tradeTarget.id] === 0) _player.playerTotalCost = 0;
+                                                        // AI側：現金減少・保有株増加
+                                                        c.cash -= ord.price * execAmt;
+                                                        tradeTarget.shareholders[c.id] = (tradeTarget.shareholders[c.id] || 0) + execAmt;
+                                                        matchedFromPlayer += execAmt;
+                                                        window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + profit;
+                                                        addLog(`【AI約定・買い】${c.name.replace(/\[.*?\]\s*/, '')} が ${tradeTarget.name.replace(/\[.*?\]\s*/, '')} を ¥${ord.price.toLocaleString()}/株 で購入（プレイヤーの売り注文と対当）`, 'success', '市場', 3);
+                                                        if (execAmt < ord.amount) { ord.amount -= execAmt; return true; } // 一部約定
+                                                        return false; // 全量約定→注文削除
+                                                    }
+                                                }
+                                            }
+                                            return true;
+                                        });
+                                    }
+                                    // ② 残量を市場（浮動株）から購入
+                                    let remainBuy = Math.min(buyAmount - matchedFromPlayer, window.getMarketShares(tradeTarget));
+                                    if (remainBuy > 0 && c.cash >= remainBuy * tradeTarget.stockPrice) {
+                                        c.cash -= remainBuy * tradeTarget.stockPrice;
+                                        tradeTarget.shareholders[c.id] = (tradeTarget.shareholders[c.id] || 0) + remainBuy;
+                                        if (tradeTarget.shareholders['market'] !== undefined)
+                                            tradeTarget.shareholders['market'] = Math.max(0, (tradeTarget.shareholders['market'] || 0) - remainBuy);
+                                    }
+                                    let totalBought = matchedFromPlayer + remainBuy;
+                                    if (totalBought > 0 && week % 4 === 0)
+                                        addLog(`【AI買い】${c.name.replace(/\[.*?\]\s*/, '')} が ${tradeTarget.name.replace(/\[.*?\]\s*/, '')} を ${totalBought.toLocaleString()}株 購入`, 'normal', '市場');
                                 }
                             }
-                            
-                            // 売り判断 (利益確定・損切り)
-                            let currentOwned = tradeTarget.shareholders[c.id] || 0;
-                            if (currentOwned > 0 && (pbr_t > 3.0 || roe_t < 2)) {
-                                let sellAmount = Math.floor(currentOwned * 0.5);
-                                tradeTarget.shareholders[c.id] -= sellAmount;
-                                c.cash += sellAmount * tradeTarget.stockPrice;
-                            }
 
-                            // 🌟 AIによる空売り (性格がGreedy かつ 格付けDの場合)
+                            // 🌟 AIによる空売り（性格がGreedy かつ 財務悪化の場合）
                             if (c.personality === 'Greedy' && netAssets_t < -10000000 && pbr_t > 5.0 && Math.random() < 0.05) {
                                 if (!c._aiShorts) c._aiShorts = {};
                                 if (!c._aiShorts[tradeTarget.id]) {
-                                    let shortAmount = Math.floor(tradeTarget.shares * 0.001); // 0.1% 
+                                    let shortAmount = Math.floor(tradeTarget.shares * 0.001); // 0.1%
                                     let margin = Math.floor(shortAmount * tradeTarget.stockPrice * 0.5);
                                     if (c.cash >= margin) {
                                         c.cash -= margin;
@@ -5084,6 +5143,70 @@
                                         if (week % 4 === 0) addLog(`【AI空売り】${c.name.replace(/\[.*?\]\s*/, '')} が ${tradeTarget.name.replace(/\[.*?\]\s*/, '')} を空売りしました。`, 'warning', '市場');
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // ── AI売り行動（持ち合い株・ポートフォリオをオーダーブック経由で売却） ──
+                    if (Math.random() < _tChance.sell) {
+                        // 保有している他社株（持ち合い・ポートフォリオ）から売却対象を選択
+                        let _ownedTargets = companies.filter(t =>
+                            t.id !== c.id && (t.shareholders[c.id] || 0) > 0 && t.isPublic && !t.isBankrupt
+                        );
+                        if (_ownedTargets.length > 0) {
+                            // Turnaroundは最も評価額が高い銘柄を優先売却（資金調達のため）
+                            if (c.personality === 'Turnaround') {
+                                _ownedTargets.sort((a, b) =>
+                                    (b.stockPrice * (b.shareholders[c.id] || 0)) - (a.stockPrice * (a.shareholders[c.id] || 0))
+                                );
+                            } else {
+                                _ownedTargets.sort(() => Math.random() - 0.5);
+                            }
+                            let sellTarget = _ownedTargets[0];
+                            let ownedAmt = sellTarget.shareholders[c.id] || 0;
+                            let maxSellPct = _aiMaxSellPct[c.personality] || 0.020;
+                            let sellAmount = Math.min(Math.floor(sellTarget.shares * maxSellPct), ownedAmt);
+                            if (sellAmount > 0) {
+                                // ① プレイヤーの指値買い注文との対当（相互取引）
+                                let _player = companies[0];
+                                let matchedToPlayer = 0;
+                                if (_player.pendingOrders && _player.pendingOrders.length > 0) {
+                                    _player.pendingOrders = _player.pendingOrders.filter(ord => {
+                                        if (matchedToPlayer >= sellAmount) return true;
+                                        // プレイヤーの買い指値注文と対当（type: 'spot' または 'buy'）
+                                        if (ord.coId === sellTarget.id && (ord.type === 'spot' || ord.type === 'buy')) {
+                                            // プレイヤーの買い希望価格が現在株価以上なら約定
+                                            if (ord.price >= sellTarget.stockPrice) {
+                                                let execAmt = Math.min(ord.amount, sellAmount - matchedToPlayer);
+                                                if (_player.cash >= ord.price * execAmt) {
+                                                    // プレイヤー側：現金減少・保有株増加
+                                                    _player.cash -= ord.price * execAmt;
+                                                    _player.shareholders[sellTarget.id] = (_player.shareholders[sellTarget.id] || 0) + execAmt;
+                                                    _player.playerTotalCost += ord.price * execAmt;
+                                                    // AI側：現金入金・保有株減少（プレイヤーの指値価格で受け取る）
+                                                    sellTarget.shareholders[c.id] = Math.max(0, (sellTarget.shareholders[c.id] || 0) - execAmt);
+                                                    c.cash += ord.price * execAmt;
+                                                    matchedToPlayer += execAmt;
+                                                    addLog(`【AI約定・売り】${c.name.replace(/\[.*?\]\s*/, '')} が ${sellTarget.name.replace(/\[.*?\]\s*/, '')} を ¥${ord.price.toLocaleString()}/株 で売却（プレイヤーの買い注文と対当）`, 'success', '市場', 3);
+                                                    if (execAmt < ord.amount) { ord.amount -= execAmt; return true; } // 一部約定
+                                                    return false; // 全量約定→注文削除
+                                                }
+                                            }
+                                        }
+                                        return true;
+                                    });
+                                }
+                                // ② 残量を市場（浮動株）に戻す
+                                let remainSell = sellAmount - matchedToPlayer;
+                                if (remainSell > 0) {
+                                    sellTarget.shareholders[c.id] = Math.max(0, (sellTarget.shareholders[c.id] || 0) - remainSell);
+                                    c.cash += remainSell * sellTarget.stockPrice;
+                                    if (sellTarget.shareholders['market'] !== undefined)
+                                        sellTarget.shareholders['market'] = (sellTarget.shareholders['market'] || 0) + remainSell;
+                                }
+                                let totalSold = matchedToPlayer + remainSell;
+                                if (totalSold > 0 && week % 4 === 0)
+                                    addLog(`【AI売り】${c.name.replace(/\[.*?\]\s*/, '')} が ${sellTarget.name.replace(/\[.*?\]\s*/, '')} を ${totalSold.toLocaleString()}株 売却`, 'normal', '市場');
                             }
                         }
                     }
