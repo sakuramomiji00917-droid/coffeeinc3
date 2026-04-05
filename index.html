@@ -7425,7 +7425,8 @@
             for (let order of _p.pendingOrders) {
                 let tgtCo = companies.find(cx => cx.id === order.coId);
                 if (!tgtCo || tgtCo.isBankrupt) {
-                    addLog(`【注文失効】${(tgtCo ? tgtCo.name : '見つからない企業')} が破産等のため、指値注文 (${order.type === 'buy' ? '買' : '売'} ${order.amount}株) は失効しました。`, 'warning', '市場');
+                    let _orderLabel = (order.type === 'buy' || order.type === 'spot') ? '買い' : (order.type === 'sell' || order.type === 'spot_sell') ? '売り' : order.type === 'marginlong' ? '信用買い' : '空売り';
+                    addLog(`【注文失効】${(tgtCo ? tgtCo.name : '見つからない企業')} が破産等のため、指値${_orderLabel}注文 (${order.amount}株) は失効しました。`, 'warning', '市場');
                     continue;
                 }
 
@@ -7436,7 +7437,7 @@
                 let lowP = latestOHLCV ? latestOHLCV.l : tgtCo.stockPrice;
                 let highP = latestOHLCV ? latestOHLCV.h : tgtCo.stockPrice;
 
-                if (order.type === 'buy') {
+                if (order.type === 'buy' || order.type === 'spot') {
                     if (lowP <= order.price) {
                         let cost = order.price * order.amount;
                         if (_p.cash >= cost) {
@@ -7447,7 +7448,10 @@
                                 let currentOwned = tgtCo.shareholders['player'] || 0;
                                 tgtCo.shareholders['player'] = currentOwned + order.amount;
                                 if (tgtCo.shareholders['market'] !== undefined) tgtCo.shareholders['market'] = Math.max(0, (tgtCo.shareholders['market'] || 0) - order.amount);
-                                tgtCo.playerTotalCost += cost;
+                                tgtCo.playerTotalCost = (tgtCo.playerTotalCost || 0) + cost;
+                                if (!_p._spotAvgPrices) _p._spotAvgPrices = {};
+                                let _prevAvg = _p._spotAvgPrices[tgtCo.id] || 0;
+                                _p._spotAvgPrices[tgtCo.id] = (_prevAvg * currentOwned + cost) / (currentOwned + order.amount);
                                 addLog(`【約定】指値買い: ${tgtCo.name.replace(/\[.*?\]\s*/, '')} ${order.amount.toLocaleString()}株 @ ¥${order.price.toLocaleString()} (-¥${Math.floor(cost / 10000).toLocaleString()}万)`, 'success', '自社', 4);
                                 executed = true;
                             }
@@ -7455,20 +7459,20 @@
                             addLog(`【約定失敗】指値買い: 資金不足（${tgtCo.name.replace(/\[.*?\]\s*/, '')} ${order.amount.toLocaleString()}株 @ ¥${order.price.toLocaleString()}）`, 'warning', '自社');
                         }
                     }
-                } else if (order.type === 'sell') {
+                } else if (order.type === 'sell' || order.type === 'spot_sell') {
                     if (highP >= order.price) {
                         let owned = tgtCo.shareholders['player'] || 0;
                         if (owned >= order.amount) {
                             let revenue = order.price * order.amount;
-                            let avgCost = tgtCo.playerTotalCost / owned;
+                            let avgCost = owned > 0 ? (tgtCo.playerTotalCost || 0) / owned : 0;
                             let profitPerShare = order.price - avgCost;
                             let totalProfit = profitPerShare * order.amount;
 
                             _p.cash += revenue;
-                            tgtCo.playerTotalCost -= avgCost * order.amount;
+                            tgtCo.playerTotalCost = Math.max(0, (tgtCo.playerTotalCost || 0) - avgCost * order.amount);
                             tgtCo.shareholders['player'] -= order.amount;
                             if (tgtCo.isPublic) tgtCo.shareholders['market'] = (tgtCo.shareholders['market'] || 0) + order.amount;
-                            if (tgtCo.shareholders['player'] === 0) tgtCo.playerTotalCost = 0;
+                            if (tgtCo.shareholders['player'] <= 0) { tgtCo.shareholders['player'] = 0; tgtCo.playerTotalCost = 0; }
 
                             window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + totalProfit;
                             let profSign = totalProfit >= 0 ? '+' : '';
@@ -7476,6 +7480,26 @@
                             executed = true;
                         } else {
                             addLog(`【約定失敗】指値売り: 保有株不足（${tgtCo.name.replace(/\[.*?\]\s*/, '')} ${order.amount.toLocaleString()}株）`, 'warning', '自社');
+                        }
+                    }
+                } else if (order.type === 'marginlong') {
+                    if (lowP <= order.price) {
+                        let success = window.performStockTrade('player', tgtCo.id, order.amount, 'marginlong', order.price);
+                        if (success) {
+                            addLog(`【約定】指値信用買い: ${tgtCo.name.replace(/\[.*?\]\s*/, '')} ${order.amount.toLocaleString()}株 @ ¥${order.price.toLocaleString()}`, 'success', '自社', 4);
+                            executed = true;
+                        } else {
+                            addLog(`【約定失敗】指値信用買い: 証拠金不足（${tgtCo.name.replace(/\[.*?\]\s*/, '')} ${order.amount.toLocaleString()}株）`, 'warning', '自社');
+                        }
+                    }
+                } else if (order.type === 'marginshort') {
+                    if (highP >= order.price) {
+                        let success = window.performStockTrade('player', tgtCo.id, order.amount, 'marginshort', order.price);
+                        if (success) {
+                            addLog(`【約定】指値空売り: ${tgtCo.name.replace(/\[.*?\]\s*/, '')} ${order.amount.toLocaleString()}株 @ ¥${order.price.toLocaleString()}`, 'alert', '自社', 4);
+                            executed = true;
+                        } else {
+                            addLog(`【約定失敗】指値空売り: 証拠金不足（${tgtCo.name.replace(/\[.*?\]\s*/, '')} ${order.amount.toLocaleString()}株）`, 'warning', '自社');
                         }
                     }
                 }
@@ -10323,7 +10347,7 @@ ${ds.desc}`)) {
                                 <th>数量 / 取得単価</th>
                                 <th>現在値</th>
                                 <th>評価損益</th>
-                                <th>証拠金 / 維持率</th>
+                                <th>証拠金 / 操作</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -10342,7 +10366,7 @@ ${ds.desc}`)) {
                                             <td>${spotCount.toLocaleString()} 株<br><span style="font-size:11px;color:var(--text-mut);">¥${avg > 0 ? avg.toLocaleString() : '---'}</span></td>
                                             <td>¥${c.stockPrice.toLocaleString()}</td>
                                             <td style="color:${pl >= 0 ? 'var(--success)' : 'var(--danger)'}; font-weight:bold;">${pl >= 0 ? '+' : ''}${pl.toLocaleString()}</td>
-                                            <td style="color:var(--text-mut);">---</td>
+                                            <td><button onclick="openSellModal('${c.id}')" style="padding:5px 10px;font-size:11px;font-weight:bold;background:var(--danger);color:#fff;border:none;border-radius:6px;cursor:pointer;width:100%;">💰 売却</button></td>
                                         </tr>`;
                                     }
 
@@ -10362,6 +10386,7 @@ ${ds.desc}`)) {
                                                 ¥${pos.margin.toLocaleString()}<br>
                                                 <div style="display:flex; justify-content:space-between; margin-top:4px;"><span>余力</span><span style="color:${rColor}; font-weight:bold;">${mRatio.toFixed(0)}%</span></div>
                                                 <div class="m-gauge"><div class="m-fill" style="width:${mRatio}%; background:${rColor};"></div></div>
+                                                <button onclick="closeMarginLong('${c.id}')" style="margin-top:6px;padding:5px 8px;font-size:11px;font-weight:bold;background:var(--primary);color:#fff;border:none;border-radius:6px;cursor:pointer;width:100%;">🔄 決済</button>
                                             </td>
                                         </tr>`;
                                     }
@@ -10382,6 +10407,7 @@ ${ds.desc}`)) {
                                                 ¥${pos.margin.toLocaleString()}<br>
                                                 <div style="display:flex; justify-content:space-between; margin-top:4px;"><span>余力</span><span style="color:${rColor}; font-weight:bold;">${mRatio.toFixed(0)}%</span></div>
                                                 <div class="m-gauge"><div class="m-fill" style="width:${mRatio}%; background:${rColor};"></div></div>
+                                                <button onclick="closeMarginShort('${c.id}')" style="margin-top:6px;padding:5px 8px;font-size:11px;font-weight:bold;background:var(--danger);color:#fff;border:none;border-radius:6px;cursor:pointer;width:100%;">🔄 買戻し</button>
                                             </td>
                                         </tr>`;
                                     }
@@ -11541,9 +11567,10 @@ ${ds.desc}`)) {
                             <div style="font-size:10px;color:#94a3b8;font-weight:700;margin-bottom:3px;">自社保有</div>
                             <div style="font-size:14px;font-weight:900;color:var(--primary);">${o > 0 ? o.toLocaleString() + '株 (' + (pVal >= 0 ? '+' : '') + Math.floor(pVal / 10000).toLocaleString() + '万)' : '-'}</div>
                         </div>
-                        <div style="padding:12px 16px; flex:2; display:flex; gap:8px; align-items:center;">
-                            <button class="btn-primary" style="flex:2;padding:10px;border-radius:6px;font-size:13px;font-weight:900;" onclick="openTradeModal('${sel.id}')">⚡ 取引 / 予約 (指値・成行)</button>
-                            ${sel.id !== 'player' ? `<button class="btn-outline" style="flex:1;padding:10px;border-radius:6px;font-size:12px;font-weight:900;" onclick="openCompanyModal('${sel.id}')">詳細・方針</button>` : ''}
+                        <div style="padding:12px 16px; flex:2; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                            <button class="btn-primary" style="flex:2;padding:10px;border-radius:6px;font-size:13px;font-weight:900;min-width:120px;" onclick="openTradeModal('${sel.id}')">⚡ 取引 / 予約 (指値・成行)</button>
+                            ${o > 0 ? `<button class="btn-danger" style="flex:1;padding:10px;border-radius:6px;font-size:13px;font-weight:900;min-width:80px;" onclick="openSellModal('${sel.id}')">📉 売却</button>` : ''}
+                            ${sel.id !== 'player' ? `<button class="btn-outline" style="flex:1;padding:10px;border-radius:6px;font-size:12px;font-weight:900;min-width:80px;" onclick="openCompanyModal('${sel.id}')">詳細・方針</button>` : ''}
                         </div>
                     </div>
                 </div>`;
@@ -12082,8 +12109,22 @@ ${ds.desc}`)) {
                 if (owned < amount) return false;
                 actor.cash += (totalPrice - comm);
                 if (broker) { broker.cash += comm; broker.lastRevenue += comm; }
+                // コスト按分と損益計算
+                let _spotProfit = 0;
+                if (actorId === 'player') {
+                    let avgCost = owned > 0 ? (target.playerTotalCost || 0) / owned : 0;
+                    _spotProfit = (price - avgCost) * amount;
+                    target.playerTotalCost = Math.max(0, (target.playerTotalCost || 0) - avgCost * amount);
+                    window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + _spotProfit;
+                    if (actor._spotAvgPrices) { if (target.shareholders[actorId] - amount <= 0) delete actor._spotAvgPrices[targetId]; }
+                }
                 target.shareholders[actorId] -= amount;
-                if (actorId === 'player') addLog(`【現物売却】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 決済。`, 'normal', '自社');
+                if (target.isPublic) target.shareholders['market'] = (target.shareholders['market'] || 0) + amount;
+                if (target.shareholders[actorId] <= 0) { target.shareholders[actorId] = 0; if (actorId === 'player') target.playerTotalCost = 0; }
+                if (actorId === 'player') {
+                    let _profSign = _spotProfit >= 0 ? '+' : '';
+                    addLog(`【現物売却】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 @ ¥${price.toLocaleString()} (損益: ${_profSign}¥${Math.floor(_spotProfit/10000).toLocaleString()}万)`, _spotProfit >= 0 ? 'success' : 'warning', '自社');
+                }
             } else if (type === 'marginlong') {
                 // 信用買い
                 let marginReq = Math.floor(totalPrice * 0.5);
@@ -12149,6 +12190,56 @@ ${ds.desc}`)) {
         };
 
 
+
+        // ==========================================
+        // 📉 売却・信用決済ヘルパー関数
+        // ==========================================
+
+        // 取引モーダルを売却モードで開く
+        window.openSellModal = function (id) {
+            openTradeModal(id);
+            setTimeout(() => setTradeMode('sell'), 50);
+        };
+
+        // 信用買い（ロング）の手動決済
+        window.closeMarginLong = function (coId) {
+            let c = companies.find(x => x.id === coId), p = companies[0];
+            if (!c || !p._marginLongs || !p._marginLongs[coId]) return;
+            let pos = p._marginLongs[coId];
+            let revenue = c.stockPrice * pos.count;
+            let profit = (c.stockPrice - pos.avgPrice) * pos.count;
+            let broker = companies.find(cx => cx.id === p.brokerCoId);
+            let feeRate = broker ? (broker.id.endsWith('_0') ? 0.0012 : broker.id.endsWith('_1') ? 0.001 : 0.0007) : 0.001;
+            let comm = Math.floor(revenue * feeRate);
+            p.cash += (pos.margin + profit - comm);
+            if (p.cash < 0) p.cash = 0;
+            if (broker) { broker.cash += comm; broker.lastRevenue = (broker.lastRevenue || 0) + comm; }
+            window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + profit;
+            let profSign = profit >= 0 ? '+' : '';
+            addLog(`【信用買い決済】${c.name.replace(/\[.*?\]\s*/,'')} ${pos.count.toLocaleString()}株 @ ¥${c.stockPrice.toLocaleString()} (損益: ${profSign}¥${Math.floor(profit/10000).toLocaleString()}万)`, profit >= 0 ? 'success' : 'warning', '自社');
+            delete p._marginLongs[coId];
+            updateDashboard(); renderPortfolio();
+        };
+
+        // 空売り（ショート）の手動決済（買戻し）
+        window.closeMarginShort = function (coId) {
+            let c = companies.find(x => x.id === coId), p = companies[0];
+            if (!c || !p._marginShorts || !p._marginShorts[coId]) return;
+            let pos = p._marginShorts[coId];
+            let buybackCost = c.stockPrice * pos.count;
+            let profit = (pos.avgPrice - c.stockPrice) * pos.count;
+            let broker = companies.find(cx => cx.id === p.brokerCoId);
+            let feeRate = broker ? (broker.id.endsWith('_0') ? 0.0012 : broker.id.endsWith('_1') ? 0.001 : 0.0007) : 0.001;
+            let comm = Math.floor(buybackCost * feeRate);
+            p.cash += (pos.margin + profit - comm);
+            if (p.cash < 0) p.cash = 0;
+            if (broker) { broker.cash += comm; broker.lastRevenue = (broker.lastRevenue || 0) + comm; }
+            window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + profit;
+            let profSign = profit >= 0 ? '+' : '';
+            addLog(`【空売り買戻し決済】${c.name.replace(/\[.*?\]\s*/,'')} ${pos.count.toLocaleString()}株 @ ¥${c.stockPrice.toLocaleString()} (損益: ${profSign}¥${Math.floor(profit/10000).toLocaleString()}万)`, profit >= 0 ? 'success' : 'warning', '自社');
+            delete p._marginShorts[coId];
+            updateDashboard(); renderPortfolio();
+        };
 
         // ==========================================
         // 🌟 新機能ロジック：融資実行 と DES（株式転換）
