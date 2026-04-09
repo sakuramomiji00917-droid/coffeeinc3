@@ -2124,11 +2124,11 @@
                 document.getElementById('mobile-disp-week').innerHTML = weekStr + `<span style="font-size:10px;margin-left:4px;padding:2px 6px;border-radius:8px;background:${window.getEconColor()};color:#fff;font-weight:900;">${window.getEconLabel()}</span>` + (p.isPublic ? `<span style="font-size:10px;margin-left:2px;padding:2px 6px;border-radius:8px;background:${_govRank.color};color:#fff;font-weight:900;">Gov:${_govRank.rank}</span>` : '');
             }
             let totalAvailable = p.cash + Object.values(p.deposits || {}).reduce((s, v) => s + v, 0);
-            document.getElementById('disp-cash').innerText = `¥${p.cash.toLocaleString()}`;
+            document.getElementById('disp-cash').innerText = `¥${Math.floor(p.cash).toLocaleString()}`;
             let depEl = document.getElementById('disp-deposit');
             let depTotal2 = Object.values(p.deposits || {}).reduce((s, v) => s + v, 0);
             if (depEl) depEl.innerText = `¥${depTotal2.toLocaleString()}`;
-            if (document.getElementById('mobile-disp-cash')) document.getElementById('mobile-disp-cash').innerText = `¥${p.cash.toLocaleString()}`;
+            if (document.getElementById('mobile-disp-cash')) document.getElementById('mobile-disp-cash').innerText = `¥${Math.floor(p.cash).toLocaleString()}`;
 
             // セントラル・ファイナンス：格付けの自動計算
 
@@ -4531,7 +4531,7 @@
                             let trend = target._ohlcv.length > 5 ? (target.stockPrice - target._ohlcv[target._ohlcv.length-5].c) / target._ohlcv[target._ohlcv.length-5].c : 0;
                             
                             // 性格とトレンドに基づいた判断
-                            let amount = Math.floor(c.cash * 0.2 / target.stockPrice); // 資金の20%分を証拠金として活用
+                            let amount = Math.max(100, Math.floor(c.cash * 0.2 / target.stockPrice / 100) * 100); // 資金の20%分を証拠金として活用（100株単位）
                             if (amount > 0) {
                                 if (trend > 0.05 || (c.personality === 'Greedy' && Math.random() > 0.5)) {
                                     // 信用買い
@@ -4735,7 +4735,7 @@
                             let loss = (targetCo.stockPrice - pos.avgPrice) * pos.count;
                             if (loss > pos.margin * 0.8) {
                                 let penalty = Math.floor(targetCo.stockPrice * pos.count * 0.005);
-                                c.cash += (pos.margin - loss - penalty);
+                                c.cash += Math.floor(pos.margin - loss - penalty);
                                 if (broker) { broker.cash += penalty; broker.lastRevenue += penalty; }
                                 delete c._marginShorts[sid];
                                 if (c.id === 'player') addLog(`【ロスカット】${targetCo.name.replace(/\[.*?\]\s*/,'')} の空売りが強制決済されました。`, 'alert', '自社');
@@ -4762,7 +4762,7 @@
                             let loss = (pos.avgPrice - targetCo.stockPrice) * pos.count;
                             if (loss > pos.margin * 0.8) {
                                 let penalty = Math.floor(targetCo.stockPrice * pos.count * 0.005);
-                                c.cash += (pos.margin - loss - penalty);
+                                c.cash += Math.floor(pos.margin - loss - penalty);
                                 if (broker) { broker.cash += penalty; broker.lastRevenue += penalty; }
                                 delete c._marginLongs[sid];
                                 if (c.id === 'player') addLog(`【ロスカット】${targetCo.name.replace(/\[.*?\]\s*/,'')} の信用買いが強制決済されました。`, 'alert', '自社');
@@ -10360,6 +10360,11 @@ ${ds.desc}`)) {
                                     let spotCount = c.shareholders['player'] || 0;
                                     if (spotCount > 0) {
                                         let avgCostTotal = c.playerTotalCost || 0;
+                                        // フォールバック: 取得単価未記録の場合は現在の株価で初期化
+                                        if (avgCostTotal === 0 && spotCount > 0) {
+                                            c.playerTotalCost = c.stockPrice * spotCount;
+                                            avgCostTotal = c.playerTotalCost;
+                                        }
                                         let avg = spotCount > 0 ? Math.floor(avgCostTotal / spotCount) : 0;
                                         let pl = avgCostTotal > 0 ? c.stockPrice * spotCount - avgCostTotal : 0;
                                         rows += `<tr>
@@ -11487,14 +11492,14 @@ ${ds.desc}`)) {
                 `;
                 for (let i = 3; i >= 1; i--) {
                     let _pr = _pSrc + Math.floor(_pSrc * 0.02 * i);
-                    let _vol = Math.floor(_latestVolume * 0.15 * (Math.random() * 0.5 + 0.5));
+                    let _vol = Math.max(100, Math.floor(_latestVolume * 0.15 * (Math.random() * 0.5 + 0.5) / 100) * 100);
                     _bookStr += `<tr><td style="color:#ef4444; padding:2px;">${_vol.toLocaleString()}</td><td style="color:#e2e8f0;font-weight:bold;">${_pr.toLocaleString()}</td><td></td></tr>`; // 売板=赤のまま
                 }
                 _bookStr += `<tr style="background:#1e293b; border-top:1px solid #334155; border-bottom:1px solid #334155;"><td></td><td style="font-weight:900; font-size:12px; color:#e2e8f0; padding:2px 0;">${_pSrc.toLocaleString()}</td><td></td></tr>`;
                 for (let i = 1; i <= 3; i++) {
                     let _pr = _pSrc - Math.floor(_pSrc * 0.02 * i);
                     if (_pr <= 0) break;
-                    let _vol = Math.floor(_latestVolume * 0.15 * (Math.random() * 0.5 + 0.5));
+                    let _vol = Math.max(100, Math.floor(_latestVolume * 0.15 * (Math.random() * 0.5 + 0.5) / 100) * 100);
                     _bookStr += `<tr><td></td><td style="color:#e2e8f0;font-weight:bold;">${_pr.toLocaleString()}</td><td style="color:#0284c7; padding:2px;">${_vol.toLocaleString()}</td></tr>`;
                 }
                 _bookStr += `</table>`;
@@ -12110,6 +12115,8 @@ ${ds.desc}`)) {
                 let curAvg = actor._spotAvgPrices[targetId] || 0;
                 let curCount = (target.shareholders[actorId] || 0) - amount;
                 actor._spotAvgPrices[targetId] = (curAvg * curCount + totalPrice) / (curCount + amount);
+                // playerTotalCost に取得コストを積算（ポートフォリオの取得単価表示用）
+                if (actorId === 'player') target.playerTotalCost = (target.playerTotalCost || 0) + totalPrice;
                 
                 if (actorId === 'player') addLog(`【現物取得】${target.name.replace(/\[.*?\]\s*/,'')} ${amount.toLocaleString()}株 取得。`, 'success', '自社');
             } else if (type === 'spot_sell') {
@@ -12227,7 +12234,7 @@ ${ds.desc}`)) {
             let broker = companies.find(cx => cx.id === p.brokerCoId);
             let feeRate = broker ? (broker.id.endsWith('_0') ? 0.0012 : broker.id.endsWith('_1') ? 0.001 : 0.0007) : 0.001;
             let comm = Math.floor(revenue * feeRate);
-            p.cash += (pos.margin + profit - comm);
+            p.cash += Math.floor(pos.margin + profit - comm);
             if (p.cash < 0) p.cash = 0;
             if (broker) { broker.cash += comm; broker.lastRevenue = (broker.lastRevenue || 0) + comm; }
             window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + profit;
@@ -12247,7 +12254,7 @@ ${ds.desc}`)) {
             let broker = companies.find(cx => cx.id === p.brokerCoId);
             let feeRate = broker ? (broker.id.endsWith('_0') ? 0.0012 : broker.id.endsWith('_1') ? 0.001 : 0.0007) : 0.001;
             let comm = Math.floor(buybackCost * feeRate);
-            p.cash += (pos.margin + profit - comm);
+            p.cash += Math.floor(pos.margin + profit - comm);
             if (p.cash < 0) p.cash = 0;
             if (broker) { broker.cash += comm; broker.lastRevenue = (broker.lastRevenue || 0) + comm; }
             window.weeklyStockSaleProfit = (window.weeklyStockSaleProfit || 0) + profit;
